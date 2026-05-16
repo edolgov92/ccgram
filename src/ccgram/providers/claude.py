@@ -111,6 +111,7 @@ class ClaudeProvider:
         supports_user_command_discovery=True,
         has_yolo_confirmation=True,
         supports_task_tracking=True,
+        uses_pyte_status_parsing=True,
     )
 
     @property

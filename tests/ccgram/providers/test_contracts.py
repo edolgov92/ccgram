@@ -72,6 +72,12 @@ class TestAgentProviderCapabilities:
         with pytest.raises(FrozenInstanceError):
             caps.name = "hacked"  # type: ignore[misc]
 
+    def test_only_claude_uses_pyte_status_parsing(
+        self, provider: AgentProvider
+    ) -> None:
+        caps = provider.capabilities
+        assert caps.uses_pyte_status_parsing == (caps.name == "claude")
+
 
 class TestMakeLaunchArgs:
     def test_fresh_session_returns_empty(self, provider: AgentProvider) -> None:

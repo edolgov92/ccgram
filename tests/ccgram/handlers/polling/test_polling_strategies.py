@@ -111,6 +111,46 @@ class TestTerminalScreenBuffer:
         assert ws.rc_active
         assert ws.rc_off_since is None
 
+    def _claude_plan_pane(self) -> str:
+        sep = "─" * 30
+        return (
+            "  Would you like to proceed?\n"
+            f"  {sep}\n"
+            "  Yes     No\n"
+            f"  {sep}\n"
+            "  ctrl-g to edit in vim\n"
+        )
+
+    def test_claude_chrome_default_detects_interactive(self):
+        result = self.strategy.parse_with_pyte("@0", self._claude_plan_pane(), 200, 50)
+        assert result is not None
+        assert result.is_interactive is True
+
+    def test_non_claude_chrome_skips_claude_ui_returns_none(self):
+        result = self.strategy.parse_with_pyte(
+            "@0", self._claude_plan_pane(), 200, 50, parse_claude_chrome=False
+        )
+        assert result is None
+
+    def test_non_claude_chrome_still_populates_rendered_text(self):
+        self.strategy.parse_with_pyte(
+            "@0",
+            "Gemini is thinking…\nsome output",
+            200,
+            50,
+            parse_claude_chrome=False,
+        )
+        assert "Gemini is thinking" in self.strategy.get_rendered_text("@0", "")
+
+    def test_non_claude_chrome_still_updates_rc_state(self):
+        sep = "─" * 30
+        pane = f"agent output\r\n{sep}\r\n❯ \r\n{sep}\r\n  Remote Control active\r\n"
+        result = self.strategy.parse_with_pyte(
+            "@0", pane, 80, 10, parse_claude_chrome=False
+        )
+        assert result is None
+        assert self.strategy.is_rc_active("@0")
+
     def test_parse_with_pyte_content_hash_cache(self):
         ws = self.poll_state.get_state("@0")
         ws.last_pane_hash = hash(("same text", 200, 50))

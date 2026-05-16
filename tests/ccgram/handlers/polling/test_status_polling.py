@@ -2485,7 +2485,9 @@ class TestCheckInteractiveOnly:
         ):
             mock_tm.capture_pane = AsyncMock(return_value="Allow?\nEsc\n")
             await _check_interactive_only(bot, 1, "@0", 42, _window=mock_window)
-        mock_pyte.assert_called_once_with("@0", "Allow?\nEsc\n", columns=80, rows=24)
+        mock_pyte.assert_called_once_with(
+            "@0", "Allow?\nEsc\n", columns=80, rows=24, parse_claude_chrome=True
+        )
         mock_set.assert_called_once_with(1, "@0", 42)
         _assert_handle_called_once_with_client(mock_handle, bot, 1, "@0", 42)
 

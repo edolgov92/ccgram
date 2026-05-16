@@ -177,11 +177,22 @@ class TerminalScreenBuffer:
         pane_text: str,
         columns: int = 0,
         rows: int = 0,
+        *,
+        parse_claude_chrome: bool = True,
     ) -> StatusUpdate | None:
         """Parse terminal via pyte screen buffer for status and interactive UI.
 
         Content-hash optimization: unchanged pane content returns cached result
         without re-parsing.
+
+        ``parse_claude_chrome`` gates the Claude-specific interactive-UI and
+        status-block extraction (UI_PATTERNS + ─-separator chrome). When
+        False (non-Claude providers, issue #85) the buffer is still fed and
+        ``last_rendered_text`` / RC state are still updated — those side
+        effects are provider-agnostic and consumed by the provider path and
+        vim-insert detection — but Claude pattern extraction is skipped and
+        the function returns ``None`` so the provider's own
+        ``parse_terminal_status`` runs unshadowed.
         """
         # Lazy: terminal_parser imports terminal_parser_v100 (pyte
         # heavyweight) — match the get_screen_buffer pattern.
@@ -220,6 +231,11 @@ class TerminalScreenBuffer:
         rc_detected = detect_remote_control(buf.display)
         ws.last_rc_detected = rc_detected
         self.update_rc_state(ws, rc_detected)
+
+        if not parse_claude_chrome:
+            ws.last_pane_hash = content_hash
+            ws.last_pyte_result = None
+            return None
 
         interactive = parse_from_screen(buf)
         if interactive:
