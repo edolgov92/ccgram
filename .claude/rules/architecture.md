@@ -93,6 +93,7 @@ Top-level (constants, leaves, top-level commands):
 - `file_handler.py` — photo/document handler (save to `.ccgram-uploads/`, notify agent).
 - `hook_events.py` — dispatcher for `Stop`, `StopFailure`, `SessionEnd`, `Notification`, `Subagent*`, `Team*`.
 - `inline.py` — `inline_query_handler`, `unsupported_content_handler` (documented exception: no feature subpackage).
+- `last_reply.py` — `/last` command + `send_last_reply` backend; AI path walks the transcript for the last assistant turn, shell path extracts last command+output via prompt markers; overflows >4096 chars to a `.txt` document upload.
 - `reactions.py` — Telegram message reactions helper (Bot API 7.0+).
 - `registry.py` — central PTB handler registration (`register_all`): `CommandSpec` table + Message/Callback/Inline handler wiring. Documented exception: only handler module with runtime `from telegram.ext` import — the PTB wiring spine.
 - `response_builder.py` — response pagination and formatting.
@@ -173,7 +174,7 @@ Top-level (constants, leaves, top-level commands):
 `handlers/status/` — status bubble + topic emoji:
 
 - `status_bubble.py` — keyboard + status message lifecycle (`_status_msg_info`, `send_status_text`, `clear_status_message`, `build_status_keyboard`).
-- `status_bar_actions.py` — button callbacks (notify toggle, recall, remote control, esc, keys).
+- `status_bar_actions.py` — button callbacks (last reply, get file, recall, esc, keys).
 - `topic_emoji.py` — topic name emoji updates (active/idle/done/dead + RC/YOLO badges), debounced. Color scheme via `CCGRAM_STATUS_MODE`.
 - `rc_probe.py` — Claude `/remote-control` outcome probe: `arm_rc_probe`, pure `classify_rc_output`, `_classify_loop`. De-duped via `WindowState.rc_probe_state` (in-memory).
 

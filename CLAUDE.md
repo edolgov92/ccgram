@@ -24,7 +24,7 @@ ccgram --tmux-session <name>
 ccgram --autoclose-{done,dead} 0
 ```
 
-Bot commands in topics: `/send`, `/toolbar`, `/history`, `/sessions`, `/restore`, `/resume`, `/panes`, `/live`, `/sync`, `/upgrade`.
+Bot commands in topics: `/send`, `/toolbar`, `/history`, `/sessions`, `/restore`, `/resume`, `/panes`, `/live`, `/last`, `/sync`, `/upgrade`.
 
 ## Core Constraints
 
@@ -102,7 +102,7 @@ Topic creation lets users pick provider (Claude default, Codex, Gemini, Pi, Shel
 
 ### Remote Control Feedback (Claude only)
 
-`/remote-control` is silent on outcome. Both trigger paths (status-bubble RC button, `/remote-control` or `/rc`) call `arm_rc_probe(window_id, client)` in `handlers/status/rc_probe.py`. Probe captures pane ~1.5s after, re-scans every 1.5s up to 10s, classifies via pure `classify_rc_output()` regex (success-with-URL, success-without-URL, unavailable, failed, timeout) with `terminal_screen_buffer.is_rc_active(window_id)` as tiebreaker, posts one status reply. De-duped per-window via in-memory `WindowState.rc_probe_state` (never serialized).
+`/remote-control` is silent on outcome. Forwarding `/remote-control` or `/rc` to the agent calls `arm_rc_probe(window_id, client)` in `handlers/status/rc_probe.py` (via `commands/forward.py`). Probe captures pane ~1.5s after, re-scans every 1.5s up to 10s, classifies via pure `classify_rc_output()` regex (success-with-URL, success-without-URL, unavailable, failed, timeout) with `terminal_screen_buffer.is_rc_active(window_id)` as tiebreaker, posts one status reply. De-duped per-window via in-memory `WindowState.rc_probe_state` (never serialized).
 
 ### Shell Provider
 
@@ -142,11 +142,10 @@ Completion summary: on Stop hook, waits up to 3s for LLM to produce one line, th
 
 - `CCGRAM_LIVE_VIEW_INTERVAL` (5s), `CCGRAM_LIVE_VIEW_TIMEOUT` (300s).
 - `MONITOR_POLL_INTERVAL` (1.0s), `CCGRAM_STATUS_POLL_INTERVAL` (1.0s).
-- `CCGRAM_SCREENSHOT_HISTORY` (500 lines).
 
 Live view + poll intervals clamped to 0.5s min (live view: 1s). Auto-refreshes via `editMessageMedia`, auto-stops after timeout.
 
-Screenshots (`/screenshot`, 📷 status-bar button) capture scrollback (default 500 lines) with ANSI. For shell topics: extract last command + output between prompt markers when available, else full scrollback. Live view keeps viewport capture unchanged.
+Screenshots (`/screenshot`, 📷 status-bar button) capture the current terminal viewport with ANSI colors. Live view also captures viewport only.
 
 ## /send Command
 
@@ -177,11 +176,11 @@ Tunables: `CCGRAM_SEND_SEARCH_DEPTH` (5), `CCGRAM_SEND_MAX_RESULTS` (50).
 
 Default rows per provider:
 
-- Claude: `[Screen, Ctrl-C, Live] [Mode, Think, Esc] [Send, Enter, Close]`
-- Codex: `[Screen, Ctrl-C, Live] [Esc, Enter, Tab] [Send, Mode, Close]`
-- Gemini: `[Screen, Ctrl-C, Live] [Mode, YOLO, Esc] [Send, Enter, Close]`
-- Pi: `[Screen, Ctrl-C, Live] [Esc, Tab, π Model] [Up, Enter, Down, Send, Close]`
-- Shell: `[Screen, Ctrl-C, Live] [Enter, ^D EOF, ^Z Susp] [Send, Esc, Close]`
+- Claude: `[Screen, Ctrl-C, Live] [Mode, Think, Esc] [Up, Enter, Down] [Last, Get File, Close]`
+- Codex: `[Screen, Ctrl-C, Live] [Esc, Tab, Mode] [Up, Enter, Down] [Last, Get File, Close]`
+- Gemini: `[Screen, Ctrl-C, Live] [Mode, YOLO, Esc] [Up, Enter, Down] [Last, Get File, Close]`
+- Pi: `[Screen, Ctrl-C, Live] [Esc, Tab, π Model] [Up, Enter, Down] [Last, Get File, Close]`
+- Shell: `[Screen, Ctrl-C, Live] [Enter, ^D EOF, ^Z Susp] [Last, Get File, Esc, Close]`
 
 Toggle actions with state readback (Mode = Shift+Tab, Think = Tab, YOLO = Ctrl+Y): capture pane ~250ms after press, scrape agent mode-line, surface in answer toast (e.g., `auto-accept edits on`). Falls back to static toast when no recognized mode-line.
 
@@ -189,7 +188,7 @@ Action types in TOML:
 
 - `key`: tmux key sequence (`"Tab"`, `"C-c"`, `'\x1b[Z'`). `literal=true` for raw bytes (single-quoted TOML literal strings).
 - `text`: literal text + Enter (`"/clear"`, prompt template).
-- `builtin`: reserved (`screen`, `ctrlc`, `live`, `send`, `close`). Users cannot define new ones.
+- `builtin`: reserved (`screen`, `ctrlc`, `live`, `getfile`, `last`, `close`). Users cannot define new ones.
 
 Action names ≤24 chars (callback_data budget). Providers absent from TOML keep defaults. Malformed entries logged and skipped; loader never raises. Provider resolved from `WindowState.provider_name`.
 
@@ -207,7 +206,7 @@ style = "emoji_text"
 buttons = [
   ["screen", "ctrlc", "live"],
   ["mode",   "think", "clear"],
-  ["send",   "enter", "close"],
+  ["last",   "getfile", "close"],
 ]
 ```
 

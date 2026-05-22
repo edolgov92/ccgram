@@ -1,10 +1,10 @@
-"""Status-bubble button callbacks (notify toggle, recall, remote control, esc, keys).
+"""Status-bubble button callbacks (recall, last reply, get file, esc, keys).
 
 Handles inline keyboard callbacks originating from the status-bubble keyboard
 built by status_bubble.py:
-  - CB_STATUS_NOTIFY: Cycle notification mode (all / mentions / off)
   - CB_STATUS_RECALL: Send one of the last shown commands directly
-  - CB_STATUS_REMOTE: Activate Remote Control or show status
+  - CB_STATUS_LAST_REPLY: Show last assistant reply (or last shell output)
+  - CB_STATUS_GET_FILE: Open the file browser to download a file from agent CWD
   - CB_STATUS_ESC: Send Escape key from status message
   - CB_STATUS_KEY: Quick key dispatch (arrow keys, enter, esc, etc.)
 """
@@ -22,18 +22,15 @@ from telegram import (
     CallbackQuery,
     InlineKeyboardButton,
     InputMediaDocument,
-    Message,
     Update,
     WebAppInfo,
 )
 from telegram.error import TelegramError
 
 from ...config import config
-from ...last_unit import capture_for_screenshot
 from ...miniapp.auth import sign_token
 from ...screenshot import text_to_image
 from ... import window_query
-from ...session import session_manager
 from ...telegram_client import PTBTelegramClient
 from ...thread_router import thread_router
 from ...tmux_manager import send_to_window, tmux_manager
@@ -41,15 +38,12 @@ from ...topic_state_registry import topic_state
 from ..callback_data import (
     CB_KEYS_PREFIX,
     CB_STATUS_ESC,
-    CB_STATUS_NOTIFY,
+    CB_STATUS_GET_FILE,
+    CB_STATUS_LAST_REPLY,
     CB_STATUS_RECALL,
-    CB_STATUS_REMOTE,
-    NOTIFY_MODE_LABELS,
-    NOTIFY_MODE_REACT,
 )
 from ..callback_helpers import get_thread_id, parse_target, user_owns_window
 from ..callback_registry import register
-from ..messaging_pipeline.message_sender import react
 from ..live.screenshot_callbacks import (
     KEY_LABELS,
     KEYS_SEND_MAP,
@@ -97,43 +91,6 @@ def _clear_key_refreshes(window_id: str) -> None:
         task = _pending_key_refreshes.pop(k, None)
         if task and not task.done():
             task.cancel()
-
-
-async def _handle_notify_toggle(query: CallbackQuery, user_id: int, data: str) -> None:
-    """Handle CB_STATUS_NOTIFY: cycle notification mode for a window."""
-    window_id = data[len(CB_STATUS_NOTIFY) :]
-    if not user_owns_window(user_id, window_id):
-        await query.answer("Not your session", show_alert=True)
-        return
-    new_mode = session_manager.cycle_notification_mode(window_id)
-    label = NOTIFY_MODE_LABELS.get(new_mode, new_mode)
-    # Lazy: polling_state → status_bar_actions via callback registry,
-    # and status_bubble is a sibling — both kept lazy.
-    # Lazy: polling subpackage pulls strategies; defer per-call
-    from ..polling.polling_state import terminal_screen_buffer
-
-    # Lazy: status_bar_actions ↔ status_bubble sibling cycle
-    from .status_bubble import build_status_keyboard
-
-    keyboard = build_status_keyboard(
-        window_id,
-        rc_active=terminal_screen_buffer.is_rc_active(window_id),
-        user_id=user_id,
-    )
-    with contextlib.suppress(TelegramError):
-        await query.edit_message_reply_markup(reply_markup=keyboard)
-    # Persistent reaction so the new mode stays visible after the toast fades.
-
-    bubble = query.message
-    react_emoji = NOTIFY_MODE_REACT.get(new_mode)
-    if isinstance(bubble, Message) and react_emoji is not None:
-        await react(
-            PTBTelegramClient(query.get_bot()),
-            bubble.chat_id,
-            bubble.message_id,
-            react_emoji,
-        )
-    await query.answer(label)
 
 
 async def _handle_status_recall(
@@ -204,28 +161,6 @@ async def _handle_status_recall(
 
     record_command(user_id, thread_id, command)
     await query.answer("\u21a9 Sent")
-
-
-async def _handle_remote_control(query: CallbackQuery, user_id: int, data: str) -> None:
-    """Handle CB_STATUS_REMOTE: activate Remote Control or show status."""
-    # Lazy: polling_state cycle — same as _handle_notify_toggle.
-    from ..polling.polling_state import terminal_screen_buffer
-
-    window_id = data[len(CB_STATUS_REMOTE) :]
-    if not user_owns_window(user_id, window_id):
-        await query.answer("Not your session", show_alert=True)
-        return
-    if terminal_screen_buffer.is_rc_active(window_id):
-        await query.answer("\U0001f4e1 Remote Control active")
-    else:
-        display = thread_router.get_display_name(window_id)
-        await send_to_window(window_id, f"/remote-control {display}")
-        # Lazy: rc_probe pulls providers/__init__ at import \u2014 same reason
-        # _handle_status_recall defers the providers import in this module.
-        from .rc_probe import arm_rc_probe
-
-        arm_rc_probe(window_id, PTBTelegramClient(query.get_bot()))
-        await query.answer("\U0001f4e1 Activating\u2026")
 
 
 async def _handle_status_esc(query: CallbackQuery, user_id: int, data: str) -> None:
@@ -317,9 +252,7 @@ def _schedule_key_refresh(
                     pane_id, with_ansi=True, window_id=window_id
                 )
             else:
-                text = await capture_for_screenshot(
-                    window_id, window_query.get_window_provider(window_id)
-                )
+                text = await tmux_manager.capture_pane(window_id, with_ansi=True)
             if text:
                 png_bytes = await text_to_image(text, with_ansi=True)
                 keyboard = build_screenshot_keyboard(window_id, pane_id=pane_id)
@@ -344,40 +277,103 @@ def _schedule_key_refresh(
 # --- Dispatch for status-bar action callbacks ---
 
 
+async def _handle_last_reply(
+    query: CallbackQuery, user_id: int, data: str, update: Update
+) -> None:
+    """Handle CB_STATUS_LAST_REPLY: show last assistant reply or shell output."""
+    window_id = data[len(CB_STATUS_LAST_REPLY) :]
+    if not user_owns_window(user_id, window_id):
+        await query.answer("Not your session", show_alert=True)
+        return
+    thread_id = get_thread_id(update)
+    if thread_id is None:
+        await query.answer("Use in a topic", show_alert=True)
+        return
+    chat_id = thread_router.resolve_chat_id(user_id, thread_id)
+    # Lazy: last_reply ↔ status_bar_actions cycle
+    from ..last_reply import send_last_reply
+
+    await send_last_reply(
+        PTBTelegramClient(query.get_bot()), chat_id, thread_id, window_id
+    )
+    await query.answer("\U0001f4c4 Last reply")
+
+
+async def _handle_get_file(
+    query: CallbackQuery,
+    user_id: int,
+    data: str,
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    """Handle CB_STATUS_GET_FILE: open the file browser for the agent CWD."""
+    # Lazy: pathlib used only for the CWD existence check
+    from pathlib import Path
+
+    window_id = data[len(CB_STATUS_GET_FILE) :]
+    if not user_owns_window(user_id, window_id):
+        await query.answer("Not your session", show_alert=True)
+        return
+    view = window_query.view_window(window_id)
+    cwd = Path(view.cwd) if view and view.cwd else None
+    if not cwd or not cwd.is_dir():
+        await query.answer("Working directory not available", show_alert=True)
+        return
+    if context.user_data is None:
+        await query.answer("State error", show_alert=True)
+        return
+    thread_id = get_thread_id(update)
+    chat_id = thread_router.resolve_chat_id(user_id, thread_id) if thread_id else None
+    if chat_id is None:
+        await query.answer("Use in a topic", show_alert=True)
+        return
+    # Lazy: send subpackage ↔ status_bar_actions cycle
+    from ..send import open_file_browser
+
+    await open_file_browser(
+        PTBTelegramClient(query.get_bot()),
+        chat_id,
+        thread_id,
+        context.user_data,
+        window_id,
+        cwd,
+    )
+    await query.answer()
+
+
 async def _handle_status_bar_action(
     query: CallbackQuery,
     user_id: int,
     data: str,
     update: Update,
-    _context: ContextTypes.DEFAULT_TYPE,
+    context: ContextTypes.DEFAULT_TYPE,
 ) -> None:
     """Route status-bar action callbacks to the correct handler."""
     with_update = {
         CB_STATUS_RECALL: _handle_status_recall,
         CB_KEYS_PREFIX: _handle_keys,
+        CB_STATUS_LAST_REPLY: _handle_last_reply,
     }
     for prefix, handler in with_update.items():
         if data.startswith(prefix):
             await handler(query, user_id, data, update)
             return
 
-    without_update = {
-        CB_STATUS_ESC: _handle_status_esc,
-        CB_STATUS_NOTIFY: _handle_notify_toggle,
-        CB_STATUS_REMOTE: _handle_remote_control,
-    }
-    for prefix, handler in without_update.items():
-        if data.startswith(prefix):
-            await handler(query, user_id, data)
-            return
+    if data.startswith(CB_STATUS_ESC):
+        await _handle_status_esc(query, user_id, data)
+        return
+
+    if data.startswith(CB_STATUS_GET_FILE):
+        await _handle_get_file(query, user_id, data, update, context)
+        return
 
 
 @register(
-    CB_STATUS_NOTIFY,
     CB_STATUS_RECALL,
     CB_STATUS_ESC,
-    CB_STATUS_REMOTE,
     CB_KEYS_PREFIX,
+    CB_STATUS_LAST_REPLY,
+    CB_STATUS_GET_FILE,
 )
 async def _dispatch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query

@@ -1,4 +1,4 @@
-"""Tests for status message inline action buttons (Esc, Screenshot, Notify)."""
+"""Tests for status message inline action buttons (Esc, Screenshot, Last, Get File)."""
 
 from unittest.mock import patch
 
@@ -6,11 +6,10 @@ import pytest
 
 from ccgram.handlers.callback_data import (
     CB_STATUS_ESC,
-    CB_STATUS_NOTIFY,
+    CB_STATUS_GET_FILE,
+    CB_STATUS_LAST_REPLY,
     CB_STATUS_RECALL,
-    CB_STATUS_REMOTE,
     CB_STATUS_SCREENSHOT,
-    NOTIFY_MODE_ICONS,
 )
 from ccgram.handlers.status.status_bubble import build_status_keyboard
 
@@ -28,7 +27,12 @@ def _all_callback_data(window_id: str) -> list[str]:
 class TestBuildStatusKeyboard:
     @pytest.mark.parametrize(
         "prefix",
-        [CB_STATUS_ESC, CB_STATUS_SCREENSHOT, CB_STATUS_NOTIFY, CB_STATUS_REMOTE],
+        [
+            CB_STATUS_ESC,
+            CB_STATUS_SCREENSHOT,
+            CB_STATUS_LAST_REPLY,
+            CB_STATUS_GET_FILE,
+        ],
     )
     def test_has_button_with_prefix(self, prefix: str) -> None:
         assert any(d.startswith(prefix) for d in _all_callback_data("@0"))
@@ -37,8 +41,8 @@ class TestBuildStatusKeyboard:
         data = _all_callback_data("@42")
         assert f"{CB_STATUS_ESC}@42" in data
         assert f"{CB_STATUS_SCREENSHOT}@42" in data
-        assert f"{CB_STATUS_NOTIFY}@42" in data
-        assert f"{CB_STATUS_REMOTE}@42" in data
+        assert f"{CB_STATUS_LAST_REPLY}@42" in data
+        assert f"{CB_STATUS_GET_FILE}@42" in data
 
     def test_callback_data_truncated_to_64_bytes(self) -> None:
         long_id = "@" + "x" * 60
@@ -46,8 +50,8 @@ class TestBuildStatusKeyboard:
         prefixes = (
             CB_STATUS_ESC,
             CB_STATUS_SCREENSHOT,
-            CB_STATUS_NOTIFY,
-            CB_STATUS_REMOTE,
+            CB_STATUS_LAST_REPLY,
+            CB_STATUS_GET_FILE,
         )
         for row in kb.inline_keyboard:
             for btn in row:
@@ -55,18 +59,6 @@ class TestBuildStatusKeyboard:
                 assert isinstance(cb, str)
                 assert len(cb) == 64
                 assert any(cb.startswith(p) for p in prefixes)
-
-    @pytest.mark.parametrize(("mode", "expected_icon"), list(NOTIFY_MODE_ICONS.items()))
-    def test_bell_icon_reflects_notification_mode(
-        self, mode: str, expected_icon: str
-    ) -> None:
-        with patch(
-            "ccgram.handlers.status.status_bubble.get_notification_mode",
-            return_value=mode,
-        ):
-            kb = build_status_keyboard("@0")
-            notify_btn = kb.inline_keyboard[0][2]
-            assert notify_btn.text == expected_icon
 
     def test_no_history_single_row(self) -> None:
         kb = build_status_keyboard("@0")
@@ -82,8 +74,8 @@ class TestBuildStatusKeyboard:
         long_cmd = "a" * 30
         kb = build_status_keyboard("@0", history=[long_cmd])
         label = kb.inline_keyboard[0][0].text
-        assert label.startswith("\u2191 ")
-        assert label.endswith("\u2026")
+        assert label.startswith("↑ ")
+        assert label.endswith("…")
         assert len(label) <= 2 + 20 + 1
 
     def test_history_none_no_extra_row(self) -> None:
@@ -103,38 +95,45 @@ class TestBuildStatusKeyboard:
         assert len(cb) == 64  # type: ignore[arg-type]
         assert cb.startswith(CB_STATUS_RECALL)  # type: ignore[union-attr]
 
-    def test_rc_button_always_present(self) -> None:
+    def test_last_reply_button_present(self) -> None:
         data = _all_callback_data("@0")
-        assert any(d.startswith(CB_STATUS_REMOTE) for d in data)
+        assert any(d.startswith(CB_STATUS_LAST_REPLY) for d in data)
 
-    def test_rc_button_label_inactive(self) -> None:
+    def test_get_file_button_present(self) -> None:
+        data = _all_callback_data("@0")
+        assert any(d.startswith(CB_STATUS_GET_FILE) for d in data)
+
+    def test_no_remote_button(self) -> None:
+        data = _all_callback_data("@0")
+        assert not any(d.startswith("st:rmt:") for d in data)
+
+    def test_last_reply_button_label(self) -> None:
         kb = build_status_keyboard("@0")
-        rc_btn = [
-            btn
+        btn = [
+            b
             for row in kb.inline_keyboard
-            for btn in row
-            if isinstance(btn.callback_data, str)
-            and btn.callback_data.startswith(CB_STATUS_REMOTE)  # type: ignore[union-attr]
+            for b in row
+            if isinstance(b.callback_data, str)
+            and b.callback_data.startswith(CB_STATUS_LAST_REPLY)
         ][0]
-        assert rc_btn.text == "\U0001f4e1"
+        assert btn.text == "\U0001f4c4 Last"
 
-    def test_rc_button_label_active(self) -> None:
-        kb = build_status_keyboard("@0", rc_active=True)
-        rc_btn = [
-            btn
+    def test_get_file_button_label(self) -> None:
+        kb = build_status_keyboard("@0")
+        btn = [
+            b
             for row in kb.inline_keyboard
-            for btn in row
-            if isinstance(btn.callback_data, str)
-            and btn.callback_data.startswith(CB_STATUS_REMOTE)  # type: ignore[union-attr]
+            for b in row
+            if isinstance(b.callback_data, str)
+            and b.callback_data.startswith(CB_STATUS_GET_FILE)
         ][0]
-        assert rc_btn.text == "\U0001f4e1\u2713"
+        assert btn.text == "\U0001f4e5 Get File"
 
 
 class TestDashboardButtonRow:
     """Dashboard WebApp button is appended only when Mini App is enabled."""
 
     def test_no_dashboard_when_user_id_omitted(self) -> None:
-        # No user_id \u2192 no dashboard button even if base_url is set.
         with patch("ccgram.handlers.status.status_bar_actions.config") as cfg:
             cfg.miniapp_base_url = "https://example.com"
             cfg.telegram_bot_token = "bot:abc"
@@ -163,7 +162,6 @@ class TestDashboardButtonRow:
             cfg.miniapp_base_url = "https://example.com"
             cfg.telegram_bot_token = "bot:abc"
             kb = build_status_keyboard("@7", user_id=42)
-        # Dashboard sits in its own (last) row.
         last_row = kb.inline_keyboard[-1]
         assert len(last_row) == 1
         btn = last_row[0]
@@ -202,6 +200,5 @@ class TestDashboardButtonRow:
             cfg.miniapp_base_url = "https://example.com"
             cfg.telegram_bot_token = "bot:abc"
             kb = build_status_keyboard("@0", history=["a", "b"], user_id=42)
-        # history row + actions row + dashboard row = 3 rows.
         assert len(kb.inline_keyboard) == 3
         assert kb.inline_keyboard[-1][0].web_app is not None
