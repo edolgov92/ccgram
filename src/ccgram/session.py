@@ -19,7 +19,6 @@ Thread routing: delegated to ThreadRouter (see thread_router.py) — no pass-thr
 import json
 import structlog
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
 from .config import config
@@ -39,12 +38,11 @@ from .user_preferences import (
 )
 from .window_resolver import EMDASH_SESSION_PREFIX, is_foreign_window, is_window_id
 from .window_view import WindowView
-from .window_query import get_batch_mode as _wq_get_batch_mode
+from .window_state_ports import identity_state as _identity_state
+from .window_state_ports import lifecycle_state as _lifecycle_state
+from .window_state_ports import tool_state as _tool_state
+from .window_state_ports import worktree_state as _worktree_state
 from .window_state_store import (
-    APPROVAL_MODES,
-    BATCH_MODES,
-    DEFAULT_APPROVAL_MODE,
-    _BATCH_CYCLE,
     WindowState,
     WindowStateStore,
     install_window_store,
@@ -556,22 +554,10 @@ class SessionManager:
         exact fields the caller depends on and insulates them from internal
         WindowState shape changes.
         """
-        ws = window_store.window_states.get(window_id)
-        if ws is None:
-            return None
-        return WindowView(
-            window_id=window_id,
-            cwd=ws.cwd or "",
-            provider_name=ws.provider_name,
-            approval_mode=ws.approval_mode,
-            batch_mode=ws.batch_mode,
-            tool_call_visibility=ws.tool_call_visibility,
-            transcript_path=Path(ws.transcript_path) if ws.transcript_path else None,
-            window_name=ws.window_name,
-            session_id=ws.session_id,
-            external=ws.external,
-            origin=ws.origin,
-        )
+        # Lazy: window_query imports SessionManager-adjacent modules; keep local
+        from .window_query import view_window as _view_window
+
+        return _view_window(window_id)
 
     @property
     def window_count(self) -> int:
@@ -625,7 +611,7 @@ class SessionManager:
 
     def set_window_origin(self, window_id: str, origin: str) -> None:
         """Set the lifecycle origin for a window and persist state."""
-        window_store.set_window_origin(window_id, origin)
+        _lifecycle_state.set_window_origin(window_id, origin)
 
     def set_window_worktree(
         self, window_id: str, worktree_path: str, branch: str
@@ -636,61 +622,43 @@ class SessionManager:
         behaviour reads these yet — a forward investment for the
         eventual worktree cleanup UX.
         """
-        state = window_store.get_window_state(window_id)
-        state.worktree_path = worktree_path
-        state.worktree_branch = branch
-        self._save_state()
+        _worktree_state.set_worktree(window_id, worktree_path, branch)
 
     def get_approval_mode(self, window_id: str) -> str:
         """Get approval mode for a window (default: 'normal')."""
-        state = self.window_states.get(window_id)
-        mode = state.approval_mode if state else DEFAULT_APPROVAL_MODE
-        return mode if mode in APPROVAL_MODES else DEFAULT_APPROVAL_MODE
+        return _identity_state.get_approval_mode(window_id)
 
     def set_window_approval_mode(self, window_id: str, mode: str) -> None:
         """Set approval mode for a window."""
-        normalized = mode.lower()
-        if normalized not in APPROVAL_MODES:
-            raise ValueError(f"Invalid approval mode: {mode!r}")
-        state = window_store.get_window_state(window_id)
-        state.approval_mode = normalized
-        self._save_state()
+        _identity_state.set_window_approval_mode(window_id, mode.lower())
 
     # --- Batch mode ---
 
     def get_batch_mode(self, window_id: str) -> str:
         """Get batch mode for a window."""
-        return _wq_get_batch_mode(window_id)
+        return _tool_state.get_batch_mode(window_id)
 
     def set_batch_mode(self, window_id: str, mode: str) -> None:
         """Set batch mode for a window."""
-        if mode not in BATCH_MODES:
-            raise ValueError(f"Invalid batch mode: {mode!r}")
-        state = window_store.get_window_state(window_id)
-        if state.batch_mode != mode:
-            state.batch_mode = mode
-            self._save_state()
+        _tool_state.set_batch_mode(window_id, mode)
 
     def cycle_batch_mode(self, window_id: str) -> str:
         """Cycle batch mode: batched → ephemeral → verbose → batched. Returns new mode."""
-        current = self.get_batch_mode(window_id)
-        new_mode = _BATCH_CYCLE.get(current, "ephemeral")
-        self.set_batch_mode(window_id, new_mode)
-        return new_mode
+        return _tool_state.cycle_batch_mode(window_id)
 
     # --- Tool-call visibility ---
 
     def get_tool_call_visibility(self, window_id: str) -> str:
         """Get tool-call visibility for a window (default: 'default')."""
-        return window_store.get_tool_call_visibility(window_id)
+        return _tool_state.get_tool_call_visibility(window_id)
 
     def set_tool_call_visibility(self, window_id: str, mode: str) -> None:
         """Set tool-call visibility for a window."""
-        window_store.set_tool_call_visibility(window_id, mode)
+        _tool_state.set_tool_call_visibility(window_id, mode)
 
     def cycle_tool_call_visibility(self, window_id: str) -> str:
         """Cycle tool-call visibility: default → shown → hidden → default. Returns new mode."""
-        return window_store.cycle_tool_call_visibility(window_id)
+        return _tool_state.cycle_tool_call_visibility(window_id)
 
 
 session_manager = SessionManager()

@@ -162,6 +162,10 @@ class WindowState:
     # Gemini window lacks ccgram's hardened shell settings (issue #86).
     # Persisted so the warning is not re-shown on every bot restart.
     gemini_external_warned: bool = False
+    # User explicitly chose this provider via /agent — auto-detection
+    # (``_detect_and_apply_provider``) must not overwrite the choice
+    # until the user re-runs ``/agent auto`` (which clears the flag).
+    provider_manual_override: bool = False
 
     def to_dict(self) -> dict[str, Any]:  # noqa: C901
         d: dict[str, Any] = {
@@ -194,6 +198,8 @@ class WindowState:
             d["worktree_branch"] = self.worktree_branch
         if self.gemini_external_warned:
             d["gemini_external_warned"] = True
+        if self.provider_manual_override:
+            d["provider_manual_override"] = True
         return d
 
     @classmethod
@@ -230,6 +236,7 @@ class WindowState:
             worktree_path=data.get("worktree_path"),
             worktree_branch=data.get("worktree_branch"),
             gemini_external_warned=data.get("gemini_external_warned", False),
+            provider_manual_override=data.get("provider_manual_override", False),
         )
 
 
@@ -303,8 +310,27 @@ class WindowStateStore:
         if state.origin == origin:
             return
         state.origin = origin
-        if origin == EXTERNAL_WINDOW_ORIGIN:
-            state.external = True
+        state.external = origin == EXTERNAL_WINDOW_ORIGIN
+        self._schedule_save()
+
+    def set_worktree(self, window_id: str, worktree_path: str, branch: str) -> None:
+        """Persist worktree path + branch for a window. No-op when unchanged."""
+        state = self.get_window_state(window_id)
+        if state.worktree_path == worktree_path and state.worktree_branch == branch:
+            return
+        state.worktree_path = worktree_path
+        state.worktree_branch = branch
+        self._schedule_save()
+
+    def clear_worktree(self, window_id: str) -> None:
+        """Clear worktree path/branch metadata for a window. No-op if unset."""
+        state = self.window_states.get(window_id)
+        if state is None:
+            return
+        if state.worktree_path is None and state.worktree_branch is None:
+            return
+        state.worktree_path = None
+        state.worktree_branch = None
         self._schedule_save()
 
     def clear_session_fields(self, window_id: str) -> None:
@@ -320,6 +346,22 @@ class WindowStateStore:
         state.session_id = ""
         self._schedule_save()
         logger.info("Cleared session for window_id %s", window_id)
+
+    def set_provider_manual_override(self, window_id: str, *, value: bool) -> None:
+        """Mark or clear the provider manual-override flag. No-op when unchanged."""
+        state = self.window_states.get(window_id)
+        if state is None or state.provider_manual_override == value:
+            return
+        state.provider_manual_override = value
+        self._schedule_save()
+
+    def clear_transcript_path(self, window_id: str) -> None:
+        """Clear the persisted transcript path for a window. No-op when already empty."""
+        state = self.window_states.get(window_id)
+        if state is None or not state.transcript_path:
+            return
+        state.transcript_path = ""
+        self._schedule_save()
 
     def get_session_id_for_window(self, window_id: str) -> str | None:
         """Look up session_id for a window from window_states."""

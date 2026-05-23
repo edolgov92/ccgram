@@ -13,77 +13,69 @@ import it.
 
 from __future__ import annotations
 
-from pathlib import Path
-
-from .config import config
-from .window_state_store import (
-    APPROVAL_MODES,
-    BATCH_MODES,
-    DEFAULT_APPROVAL_MODE,
-    DEFAULT_BATCH_MODE,
-    DEFAULT_TOOL_CALL_VISIBILITY,
-    TOOL_CALL_VISIBILITY_MODES,
-    window_store,
-)
+from .window_state_ports import identity_state as _identity_state
+from .window_state_ports import lifecycle_state as _lifecycle_state
+from .window_state_ports import tool_state as _tool_state
+from .window_state_store import window_store
 from .window_view import WindowView
 
 
 def view_window(window_id: str) -> WindowView | None:
     """Read-only snapshot of a window's state, or None if no state exists."""
-    ws = window_store.window_states.get(window_id)
-    if ws is None:
+    identity = _identity_state.get_identity(window_id)
+    if identity is None:
+        return None
+    # All three ports read from the same window_states dict, so once
+    # identity is non-None the other projections are too. The explicit
+    # check survives `python -O` (asserts stripped) and avoids an
+    # AttributeError if the invariant ever breaks.
+    lifecycle = _lifecycle_state.get_lifecycle(window_id)
+    tools = _tool_state.get_tool_modes(window_id)
+    if lifecycle is None or tools is None:
         return None
     return WindowView(
         window_id=window_id,
-        cwd=ws.cwd or "",
-        provider_name=ws.provider_name,
-        approval_mode=ws.approval_mode,
-        batch_mode=ws.batch_mode,
-        tool_call_visibility=ws.tool_call_visibility,
-        transcript_path=Path(ws.transcript_path) if ws.transcript_path else None,
-        window_name=ws.window_name,
-        session_id=ws.session_id,
-        external=ws.external,
-        origin=ws.origin,
+        cwd=identity.cwd,
+        provider_name=identity.provider_name,
+        approval_mode=identity.approval_mode,
+        batch_mode=tools.batch_mode,
+        tool_call_visibility=tools.tool_call_visibility,
+        transcript_path=identity.transcript_path,
+        window_name=identity.window_name,
+        session_id=identity.session_id,
+        external=lifecycle.external,
+        origin=lifecycle.origin,
     )
 
 
 def get_window_provider(window_id: str) -> str | None:
     """Return the provider name for a window, or None if not set."""
-    state = window_store.window_states.get(window_id)
-    return state.provider_name if state else None
+    return _identity_state.get_provider_name(window_id)
 
 
 def get_approval_mode(window_id: str) -> str:
     """Get approval mode for a window (default: 'normal')."""
-    state = window_store.window_states.get(window_id)
-    mode = state.approval_mode if state else DEFAULT_APPROVAL_MODE
-    return mode if mode in APPROVAL_MODES else DEFAULT_APPROVAL_MODE
+    return _identity_state.get_approval_mode(window_id)
 
 
 def get_batch_mode(window_id: str) -> str:
-    """Get batch mode for a window.
+    """Get batch mode for a window (delegates to ``tool_state`` port).
 
     Per-window value wins when the state row exists with a valid mode.
-    Falls through to global config (ephemeral_tools) only when no row exists
+    Falls through to global config (ephemeral_tools) when no row exists
     or the stored mode is invalid.
     """
-    state = window_store.window_states.get(window_id)
-    if state and state.batch_mode in BATCH_MODES:
-        return state.batch_mode
-    return "ephemeral" if config.ephemeral_tools else DEFAULT_BATCH_MODE
+    return _tool_state.get_batch_mode(window_id)
 
 
 def is_ephemeral_tools(window_id: str) -> bool:
     """Return True if the resolved batch mode for window_id is 'ephemeral'."""
-    return get_batch_mode(window_id) == "ephemeral"
+    return _tool_state.is_ephemeral_tools(window_id)
 
 
 def get_tool_call_visibility(window_id: str) -> str:
     """Get raw per-window tool-call visibility (default/shown/hidden)."""
-    state = window_store.window_states.get(window_id)
-    mode = state.tool_call_visibility if state else DEFAULT_TOOL_CALL_VISIBILITY
-    return mode if mode in TOOL_CALL_VISIBILITY_MODES else DEFAULT_TOOL_CALL_VISIBILITY
+    return _tool_state.get_tool_call_visibility(window_id)
 
 
 def is_tool_calls_hidden(window_id: str) -> bool:
@@ -93,14 +85,7 @@ def is_tool_calls_hidden(window_id: str) -> bool:
     default. Per-window ``shown``/``hidden`` always wins; ``default`` falls
     through to the global setting.
     """
-    visibility = get_tool_call_visibility(window_id)
-    if visibility == "hidden":
-        return True
-    if visibility == "shown":
-        return False
-    # visibility == "default" — fall through to global config
-
-    return config.hide_tool_calls
+    return _tool_state.is_tool_calls_hidden(window_id)
 
 
 def get_session_id_for_window(window_id: str) -> str | None:
