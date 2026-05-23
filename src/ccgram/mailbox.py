@@ -377,7 +377,8 @@ class Mailbox:
             ]
         )
         removed = sum(self._sweep_dir(d) for d in dirs if d.is_dir())
-        logger.debug("Sweep completed", removed=removed, window_id=window_id)
+        if removed:
+            logger.debug("Sweep completed", removed=removed, window_id=window_id)
         return removed
 
     def _sweep_dir(self, inbox_dir: Path) -> int:

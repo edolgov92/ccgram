@@ -11,6 +11,13 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+# Trigger SessionManager construction so the window_store / thread_router /
+# session_map_sync proxies are wired before any integration test imports
+# session_monitor or related modules in isolation.  When the whole suite runs,
+# some other test usually imports ccgram.session first; explicit import here
+# guarantees per-file isolation.
+import ccgram.session  # noqa: F401  (import-for-side-effects)
+
 
 @pytest.fixture(autouse=True)
 def _default_replace_prompt_mode():
