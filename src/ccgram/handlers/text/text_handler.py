@@ -298,7 +298,9 @@ async def _handle_unbound_topic(
             user_data[PENDING_THREAD_ID] = thread_id
             user_data[PENDING_THREAD_TEXT] = text
         await safe_reply(message, msg_text, reply_markup=keyboard)
-        await safe_reply(message, PENDING_DELIVERY_NOTICE)
+        # Pending-delivery notice removed: the picker keyboard above
+        # already tells the user what to do next; the duplicate "💬 Will
+        # deliver once the agent starts." message was pure noise.
         return True
 
     # No unbound windows — show directory browser to create a new session
@@ -317,7 +319,7 @@ async def _handle_unbound_topic(
         user_data[PENDING_THREAD_ID] = thread_id
         user_data[PENDING_THREAD_TEXT] = text
     await safe_reply(message, msg_text, reply_markup=keyboard)
-    await safe_reply(message, PENDING_DELIVERY_NOTICE)
+    # Pending-delivery notice removed (see _handle_unbound_topic above).
     return True
 
 
