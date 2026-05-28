@@ -186,6 +186,50 @@ async def _maybe_save_diff_snapshots(*, window_id: str, bot_token: str) -> str |
     return f"{base.rstrip('/')}/diff/{token}"
 
 
+_BRIEF_TURN_THRESHOLD_CHARS = 600
+
+
+def _extract_last_assistant_text_and_tool_count(
+    transcript_path: str,
+) -> tuple[str, int]:
+    """Return ``(last_assistant_text, tool_use_count)`` for the most recent turn.
+
+    Walks the JSONL backwards from EOF, collecting assistant text until
+    it hits the previous ``user`` boundary; counts ``tool_use`` blocks
+    that appeared in the same turn so the summarizer can decide whether
+    Claude's response is "brief and self-contained" vs "did real work".
+    """
+    try:
+        lines = Path(transcript_path).read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return "", 0
+    text_chunks: list[str] = []
+    tool_count = 0
+    for raw_line in reversed(lines[-400:]):
+        try:
+            entry = json.loads(raw_line)
+        except json.JSONDecodeError:
+            continue
+        role = entry.get("role") or entry.get("type", "")
+        if role == "user":
+            # Reached the boundary — stop walking back.
+            break
+        message = entry.get("message", {})
+        if not isinstance(message, dict):
+            continue
+        content = message.get("content")
+        if isinstance(content, list):
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                btype = block.get("type", "")
+                if btype == "text" and role == "assistant":
+                    text_chunks.insert(0, block.get("text", ""))
+                elif btype == "tool_use":
+                    tool_count += 1
+    return "\n\n".join(c.strip() for c in text_chunks if c and c.strip()), tool_count
+
+
 async def _handle_stop_summary(event: Any, client: Any) -> None:
     """The layer-owned Stop handler. Reads transcript, sends one summary."""
     # Lazy: thread_router is wired by ccgram bootstrap.
@@ -238,8 +282,19 @@ async def _handle_stop_summary(event: Any, client: Any) -> None:
     if bot_for_cleanup is not None:
         await progress_bubble.stop_bubble(window_id, bot_for_cleanup)
 
-    # Run summary + share write concurrently — both touch slow I/O.
-    summary_task = asyncio.create_task(_safe_llm_summary(transcript_path))
+    # Extract Claude's actual text + tool-use count for the just-finished
+    # turn. The summarizer's strategy depends on this:
+    # - Brief reply with no tool calls → use Claude's text verbatim
+    #   (no LLM hop, no garbage hallucination if the LLM has nothing to
+    #   summarise — the bug from the user's "Hi! What can I help you
+    #   with?" turn).
+    # - Did real work (tool calls or long text) → ask the LLM for a
+    #   one-line summary so the user gets a digestible message.
+    last_text, tool_count = _extract_last_assistant_text_and_tool_count(
+        transcript_path
+    )
+    is_brief_turn = tool_count == 0 and 0 < len(last_text) <= _BRIEF_TURN_THRESHOLD_CHARS
+
     long_markdown = _build_long_view_markdown(transcript_path, num_turns)
     share_id = save_share(
         kind="claude-turn",
@@ -247,12 +302,26 @@ async def _handle_stop_summary(event: Any, client: Any) -> None:
         body_markdown=long_markdown,
         window_id=window_id,
     )
-    summary = await summary_task
-    short = (summary or "Done.").strip()
+
+    if is_brief_turn:
+        short = last_text.strip()
+    else:
+        summary = await _safe_llm_summary(transcript_path)
+        if summary:
+            short = summary.strip()
+        elif last_text:
+            # LLM unavailable AND Claude wrote text — fall back to the
+            # first line + ellipsis to avoid the "✅ No coding activity"
+            # garbage we used to post.
+            first_line = last_text.splitlines()[0].strip()
+            short = first_line if len(first_line) <= _MAX_INLINE_TEXT_CHARS else (
+                first_line[: _MAX_INLINE_TEXT_CHARS - 1].rstrip() + "…"
+            )
+        else:
+            short = "✅ Done."
+
     if len(short) > _MAX_INLINE_TEXT_CHARS:
         short = short[: _MAX_INLINE_TEXT_CHARS - 1].rstrip() + "…"
-    if not short.startswith("✅") and not short.startswith("Done"):
-        short = f"✅ {short}"
 
     # Lazy: config is the source of bot_token + miniapp settings.
     from ccgram.config import config

@@ -198,23 +198,25 @@ def _handle_new_message_silent(msg: object, *_args: Any, **_kwargs: Any) -> bool
 
     ccgram routes every transcript entry through ``handle_new_message`` —
     including the user's own message (which Claude records in the
-    transcript). For silent-mode topics we drop:
+    transcript) AND Claude's assistant text turn. For silent-mode topics
+    we drop everything; the Stop summarizer is responsible for posting
+    the single user-facing message that wraps Claude's response (short
+    response → posted verbatim; long response → LLM-summarised).
 
-    - ``role == "user"``: redundant echo of what the operator just typed.
-    - ``content_type == "thinking"``: internal monologue, not user-facing.
+    Allow-through cases:
 
-    Tool-use / tool-result messages are already gated by ccgram's own
-    ``CCGRAM_HIDE_TOOL_CALLS``. Final assistant content stays visible —
-    it IS the answer the user asked for.
+    - role == "assistant" with content_type == "tool_use"/"tool_result"
+      → already covered by ccgram's CCGRAM_HIDE_TOOL_CALLS; we don't
+      override either way.
     """
     session_id = getattr(msg, "session_id", "")
     if not session_id:
         return False
     if not _is_silent_for_session(session_id):
         return False
-    role = getattr(msg, "role", "")
-    content_type = getattr(msg, "content_type", "")
-    return role == "user" or content_type == "thinking"
+    # Suppress everything ccgram would route through here in silent mode.
+    # The Stop summarizer is what the user sees instead.
+    return True
 
 
 # ── Install / uninstall ────────────────────────────────────────────────
