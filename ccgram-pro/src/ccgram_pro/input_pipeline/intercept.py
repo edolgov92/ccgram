@@ -146,12 +146,27 @@ async def _wrapped_forward_message(
 
     Falls through to the original on non-batched windows so the upstream
     behaviour (typing action, ack reaction, command history) stays
-    intact.
+    intact. After a direct (non-batched) forward, the progress bubble
+    is started so the user sees "🔧 Working…" until Claude completes.
     """
     if not _is_batched(window_id):
         await _ORIGINAL_FORWARD_MESSAGE(
             window_id, user_id, thread_id, text, client, message
         )
+        # Lazy: progress_bubble is part of the output pipeline; deferring
+        # the import keeps the input package free of an extra cross-edge.
+        from ..output_pipeline import progress_bubble
+        from .silencer_guard import is_silent_for_window
+
+        if is_silent_for_window(window_id):
+            bot = message.get_bot() if hasattr(message, "get_bot") else None
+            if bot is not None:
+                await progress_bubble.start_bubble(
+                    window_id=window_id,
+                    bot=bot,
+                    chat_id=message.chat.id,
+                    thread_id=thread_id,
+                )
         return
     # Lazy: ack reaction has no other batch-time dependency.
     from ccgram.handlers.reactions import ack_reaction

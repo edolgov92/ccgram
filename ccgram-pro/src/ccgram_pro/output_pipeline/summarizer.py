@@ -193,6 +193,16 @@ async def _handle_stop_summary(event: Any, client: Any) -> None:
     if not bindings:
         return
 
+    # Tear down the live "🔧 Working…" bubble before posting the final
+    # summary message, so the user sees one clean transition.
+    from . import progress_bubble
+
+    bot_for_cleanup = None
+    if hasattr(client, "_bot"):
+        bot_for_cleanup = client._bot  # PTBTelegramClient wraps PTB Bot
+    if bot_for_cleanup is not None:
+        await progress_bubble.stop_bubble(window_id, bot_for_cleanup)
+
     # Run summary + share write concurrently — both touch slow I/O.
     summary_task = asyncio.create_task(_safe_llm_summary(transcript_path))
     long_markdown = _build_long_view_markdown(transcript_path, num_turns)

@@ -96,6 +96,20 @@ async def _do_flush(
     )
     await query.answer("Sent")
 
+    # Kick off the live "🔧 Working…" bubble so the user has a heartbeat
+    # while Claude processes the batched prompt. Cancelled by the Stop
+    # summarizer once the agent finishes.
+    from ..output_pipeline import progress_bubble
+
+    chat_id = query.message.chat.id if query.message else None
+    if chat_id is not None:
+        await progress_bubble.start_bubble(
+            window_id=window_id,
+            bot=context.bot,
+            chat_id=chat_id,
+            thread_id=thread_id,
+        )
+
 
 async def _do_clear(query: Any, user_id: int, thread_id: int) -> None:
     """Drop the buffered items, edit status to 🗑️ Cleared."""
