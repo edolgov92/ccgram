@@ -102,6 +102,10 @@ class TestBootstrapApplication:
                 side_effect=lambda _app: order.append("polling"),
             ),
             patch(
+                "ccgram.bootstrap.dispatch_extensions",
+                side_effect=lambda _app: order.append("extensions"),
+            ),
+            patch(
                 "ccgram.main.start_miniapp_if_enabled",
                 new=AsyncMock(side_effect=lambda: order.append("miniapp")),
             ),
@@ -120,6 +124,7 @@ class TestBootstrapApplication:
             "wire",
             "monitor",
             "polling",
+            "extensions",
             "miniapp",
         ]
 
