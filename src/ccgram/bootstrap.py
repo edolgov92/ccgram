@@ -62,6 +62,7 @@ logger = structlog.get_logger()
 session_monitor: SessionMonitor | None = None
 _status_poll_task: asyncio.Task[None] | None = None
 _callbacks_wired = False
+_extensions_dispatched = False
 
 
 def install_global_exception_handler() -> None:
@@ -215,6 +216,50 @@ def start_status_polling(application: Application) -> asyncio.Task[None]:
     return _status_poll_task
 
 
+def dispatch_extensions(application: Application) -> None:
+    """Load and run any registered ``ccgram.extensions`` entry points.
+
+    External packages register a callable in the ``ccgram.extensions``
+    entry-point group; each is invoked **synchronously** with the PTB
+    ``Application`` after the runtime callbacks are wired and before the
+    mini-app starts. Returning a coroutine is undefined — the dispatcher
+    does not await.
+
+    Entry points are sorted by ``name`` so the load order is deterministic
+    across installs. Both load failures (broad ``Exception`` so a module-
+    init crash in the extension cannot abort the bot) and install errors
+    are logged and skipped. The plugin boundary intentionally absorbs
+    faults — a misconfigured extension must not take the bot down.
+
+    Idempotent: a second invocation in the same process is a no-op, so
+    ``reset_for_testing`` does not double-register extensions whose
+    install paths call into ``register_*_callback`` (which raises on
+    double-register).
+    """
+    global _extensions_dispatched
+
+    if _extensions_dispatched:
+        return
+
+    # Lazy: importlib.metadata is only consulted at startup once.
+    from importlib.metadata import entry_points
+
+    eps = sorted(entry_points(group="ccgram.extensions"), key=lambda ep: ep.name)
+    for ep in eps:
+        try:
+            install = ep.load()
+        except Exception:  # noqa: BLE001 -- plugin boundary
+            logger.exception("Failed to load ccgram extension %s", ep.name)
+            continue
+        try:
+            install(application)
+        except Exception:  # noqa: BLE001 -- plugin boundary, see docstring
+            logger.exception("ccgram extension %s install raised", ep.name)
+            continue
+        logger.info("Loaded ccgram extension: %s", ep.name)
+    _extensions_dispatched = True
+
+
 async def bootstrap_application(application: Application) -> None:
     """Run the full post_init sequence in the prescribed order."""
     install_global_exception_handler()
@@ -225,6 +270,7 @@ async def bootstrap_application(application: Application) -> None:
     wire_runtime_callbacks()
     await start_session_monitor(application)
     start_status_polling(application)
+    dispatch_extensions(application)
 
     # Lazy: main imports bot at top, bot imports bootstrap; hoisting forms
     # main → bot → bootstrap → main on cold import.
@@ -276,7 +322,7 @@ def reset_for_testing() -> None:
     loud on double registration, and bootstrap caches its own
     ``_callbacks_wired`` flag too.
     """
-    global _callbacks_wired, session_monitor, _status_poll_task
+    global _callbacks_wired, _extensions_dispatched, session_monitor, _status_poll_task
 
     # Lazy: each module's _reset_*_for_testing hook is only needed by the
     # test harness; production callers never reach reset_for_testing().
@@ -287,6 +333,7 @@ def reset_for_testing() -> None:
     shell_capture._reset_approval_callback_for_testing()
 
     _callbacks_wired = False
+    _extensions_dispatched = False
     session_monitor = None
     _status_poll_task = None
     clear_active_monitor()

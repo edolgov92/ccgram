@@ -23,6 +23,8 @@ from typing import TYPE_CHECKING
 import structlog
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from aiohttp import web
 
 # Set by the upgrade handler to trigger os.execv() after run_polling() returns
@@ -302,6 +304,64 @@ def run_bot() -> None:
     _reraise_shutdown_signal()
 
 
+def _resolve_miniapp_factory() -> "Callable[..., web.Application] | None":
+    """Resolve a wrapping ``app_factory`` from registered entry points.
+
+    Each entry in the ``ccgram.miniapp_factory`` group is a callable that
+    receives the default ``build_app`` and returns a wrapping factory with
+    the same keyword signature. The wrapper typically calls the default
+    factory, registers additional aiohttp routes on the returned app, and
+    returns it.
+
+    Returns ``None`` when no entry point is registered or every load
+    attempt fails. The plugin boundary intentionally swallows faults so a
+    misconfigured extension cannot disable the mini-app entirely — the
+    bot keeps running with the un-wrapped factory.
+
+    When more than one entry point is registered, the lexicographically
+    smallest ``name`` wins (sorted, deterministic across installs). A
+    WARNING is logged so operators notice the conflict.
+
+    Wrappers may **add** routes and middlewares to the returned
+    ``Application`` but should not assume route mutation is supported —
+    aiohttp's ``UrlDispatcher`` exposes no clean override API.
+    """
+    # Lazy: importlib.metadata is only consulted at startup once.
+    from importlib.metadata import entry_points
+
+    eps = sorted(entry_points(group="ccgram.miniapp_factory"), key=lambda ep: ep.name)
+    if not eps:
+        return None
+
+    logger = structlog.get_logger()
+    if len(eps) > 1:
+        logger.warning(
+            "Multiple ccgram.miniapp_factory entry points; using %s (lowest name)",
+            eps[0].name,
+        )
+
+    ep = eps[0]
+    try:
+        wrapper = ep.load()
+    except Exception:  # noqa: BLE001 -- plugin boundary
+        logger.exception("Failed to load miniapp factory %s", ep.name)
+        return None
+
+    # Lazy: miniapp depends on aiohttp; importing build_app at module top
+    # would pay the aiohttp cost on every ccgram invocation, but
+    # _resolve_miniapp_factory only runs when an entry point is registered.
+    from .miniapp.server import build_app
+
+    try:
+        factory = wrapper(build_app)
+    except Exception:  # noqa: BLE001 -- plugin boundary, see docstring
+        logger.exception("miniapp factory %s raised", ep.name)
+        return None
+
+    logger.info("Loaded miniapp factory: %s", ep.name)
+    return factory
+
+
 async def start_miniapp_if_enabled() -> None:
     """Start the Mini App HTTP server when ``CCGRAM_MINIAPP_BASE_URL`` is set.
 
@@ -321,6 +381,7 @@ async def start_miniapp_if_enabled() -> None:
         return
 
     logger = structlog.get_logger()
+    app_factory = _resolve_miniapp_factory()
     try:
         # Lazy: miniapp depends on aiohttp; loading at module level would
         # break deployments that disable the dashboard via miniapp_base_url=None.
@@ -330,6 +391,7 @@ async def start_miniapp_if_enabled() -> None:
             bot_token=config.telegram_bot_token,
             host=config.miniapp_host,
             port=config.miniapp_port,
+            app_factory=app_factory,
         )
         logger.info(
             "Mini App server started: base_url=%s host=%s port=%d",
