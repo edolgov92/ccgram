@@ -30,6 +30,7 @@ from . import __version__
 from .config import ensure_layer_dirs
 from .input_pipeline import install_input_pipeline
 from .output_pipeline import install_silencer, install_summarizer
+from .plan_mode import install_plan_mode_entry
 from .workspaces.runtime import schedule_gc
 
 if TYPE_CHECKING:
@@ -55,4 +56,5 @@ def install(application: Application) -> None:
     install_silencer()
     install_summarizer()
     install_input_pipeline(application)
+    install_plan_mode_entry()
     logger.info("ccgram-pro %s installed", __version__)
