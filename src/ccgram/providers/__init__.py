@@ -297,7 +297,33 @@ def resolve_launch_command(
     yolo_flag = _YOLO_FLAGS.get(provider)
     if not yolo_flag or yolo_flag in command:
         return command
+
+    # Safety net: Claude Code refuses ``--dangerously-skip-permissions`` when
+    # the invoking user is root, exiting immediately with
+    # "cannot be used with root/sudo privileges for security reasons".
+    # Without this downgrade, the new tmux pane falls through to ``bash``,
+    # the user sees the shell-prompt-marker question, and nothing ever
+    # routes to Claude. Auto-fall-back to normal mode keeps the agent
+    # running; the operator-visible WARNING tells them why YOLO was
+    # ignored. Non-root users get the requested YOLO behaviour unchanged.
+    if provider == "claude" and _is_root_user():
+        logger.warning(
+            "Ignoring YOLO for claude: %s requires non-root, falling back to normal mode. "
+            "Run ccgram under a non-root account to use --dangerously-skip-permissions.",
+            yolo_flag,
+        )
+        return command
     return f"{command} {yolo_flag}"
+
+
+def _is_root_user() -> bool:
+    """Return True when the current process is running as uid 0 (Unix).
+
+    Windows lacks ``os.geteuid``; we treat that as "not root" since the
+    claude CLI's root check only applies on Unix-like systems anyway.
+    """
+    geteuid = getattr(os, "geteuid", None)
+    return geteuid is not None and geteuid() == 0
 
 
 def resolve_capabilities(provider_name: str | None = None) -> ProviderCapabilities:
