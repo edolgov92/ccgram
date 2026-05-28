@@ -39,12 +39,13 @@ def install_layer_commands(application: "Application") -> None:
     from .pr_fix_command import pr_fix_command, pr_log_command
     from .project_command import project_command
 
+    # PTB / Telegram command names: ``[a-z0-9_]{1,32}``. No hyphens, so we
+    # expose them under snake_case. Operator can alias in the BotFather
+    # /setcommands if a different label is wanted.
     application.add_handler(CommandHandler("project", project_command))
     application.add_handler(CommandHandler("model", model_command))
     application.add_handler(CommandHandler("pr_fix", pr_fix_command))
-    application.add_handler(CommandHandler("pr-fix", pr_fix_command))
     application.add_handler(CommandHandler("pr_log", pr_log_command))
-    application.add_handler(CommandHandler("pr-log", pr_log_command))
 
     # The callback handlers piggy-back on the same dispatch hierarchy.
     from telegram.ext import CallbackQueryHandler
