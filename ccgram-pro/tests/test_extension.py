@@ -11,12 +11,46 @@ from ccgram.miniapp.server import _BOT_TOKEN_KEY  # type: ignore[attr-defined]
 from ccgram_pro import extension, miniapp_factory
 
 
-def test_install_is_idempotent_and_creates_layer_dirs(tmp_path: Path) -> None:
-    extension.install(None)  # type: ignore[arg-type]
-    extension.install(None)  # second call must not raise
+def test_install_is_idempotent_and_creates_layer_dirs(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """install() now wires JobQueue + CallbackQueryHandler against the
+    application, so feed it a stub that records the calls.
+    """
+    handlers: list[object] = []
+    jobs: list[str] = []
+
+    class StubJobQueue:
+        def run_repeating(self, _cb, **kw: Any) -> None:
+            jobs.append(kw.get("name", "?"))
+
+    class StubApplication:
+        def __init__(self) -> None:
+            self.job_queue = StubJobQueue()
+
+        def add_handler(self, h: Any) -> None:
+            handlers.append(h)
+
+    # Avoid touching real ccgram modules from inside install_input_pipeline
+    # by neutering the two patchers from this module.
+    from ccgram_pro.input_pipeline import intercept as intercept_mod
+    from ccgram_pro.output_pipeline import silencer as silencer_mod
+    from ccgram_pro.output_pipeline import summarizer as summarizer_mod
+
+    intercept_mod._reset_for_testing()
+    silencer_mod._reset_for_testing()
+    summarizer_mod._reset_for_testing()
+
+    app = StubApplication()
+    extension.install(app)  # type: ignore[arg-type]
+    extension.install(app)  # second call must be idempotent
     assert (tmp_path / "layer" / "state").is_dir()
     assert (tmp_path / "layer" / "snapshots").is_dir()
     assert (tmp_path / "layer" / "pr-loop").is_dir()
+    # JobQueue used (workspace GC) + at least one CallbackQueryHandler
+    # registered (batch flush/clear).
+    assert jobs and any("workspace_gc" in j for j in jobs)
+    assert handlers
 
 
 def _stub_build_app_factory(captured: dict[str, Any]):

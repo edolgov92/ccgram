@@ -28,6 +28,7 @@ import structlog
 
 from . import __version__
 from .config import ensure_layer_dirs
+from .input_pipeline import install_input_pipeline
 from .output_pipeline import install_silencer, install_summarizer
 from .workspaces.runtime import schedule_gc
 
@@ -53,4 +54,5 @@ def install(application: Application) -> None:
     schedule_gc(application)
     install_silencer()
     install_summarizer()
+    install_input_pipeline(application)
     logger.info("ccgram-pro %s installed", __version__)
