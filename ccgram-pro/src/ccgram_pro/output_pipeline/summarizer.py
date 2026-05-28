@@ -128,17 +128,19 @@ async def _post_summary_message(
     thread_id: int | None,
     summary: str,
     link_url: str | None,
+    diff_url: str | None = None,
 ) -> None:
-    """Send the single Stop summary message, with optional View-full button."""
+    """Send the single Stop summary message with View-full and Diff buttons."""
     # Lazy: PTB types pulled in only on the actual send path.
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
     from telegram.error import TelegramError
 
-    reply_markup = None
+    buttons: list[InlineKeyboardButton] = []
     if link_url:
-        reply_markup = InlineKeyboardMarkup(
-            [[InlineKeyboardButton(_BUTTON_LABEL, url=link_url)]]
-        )
+        buttons.append(InlineKeyboardButton(_BUTTON_LABEL, url=link_url))
+    if diff_url:
+        buttons.append(InlineKeyboardButton("📊 View diff", url=diff_url))
+    reply_markup = InlineKeyboardMarkup([buttons]) if buttons else None
     try:
         await client.send_message(
             chat_id=chat_id,
@@ -149,6 +151,39 @@ async def _post_summary_message(
         )
     except TelegramError as exc:
         logger.warning("failed to send Stop summary: %s", exc)
+
+
+async def _maybe_save_diff_snapshots(*, window_id: str, bot_token: str) -> str | None:
+    """Capture an iteration snapshot (+ session anchor if missing). Return URL."""
+    # Lazy: git_ops pulls subprocess; only needed if we actually have a repo.
+    from ccgram.window_query import view_window
+
+    from ..git_ops import save_snapshot
+    from ..git_ops._run import GitOpError
+    from ..git_ops.snapshot import list_snapshots
+    from ..share.links import _miniapp_base_url
+    from ..share.tokens import sign_share_token
+
+    view = view_window(window_id)
+    if not view or not view.cwd:
+        return None
+
+    existing = list_snapshots(window_id)
+    try:
+        if "session" not in existing:
+            save_snapshot(
+                window_id=window_id, label="session", project_root=view.cwd
+            )
+        save_snapshot(window_id=window_id, label="iteration", project_root=view.cwd)
+    except (GitOpError, ValueError) as exc:
+        logger.debug("diff snapshot save failed for %s: %s", window_id, exc)
+        return None
+
+    base = _miniapp_base_url()
+    if not base:
+        return None
+    token = sign_share_token(bot_token=bot_token, share_id=window_id)
+    return f"{base.rstrip('/')}/diff/{token}"
 
 
 async def _handle_stop_summary(event: Any, client: Any) -> None:
@@ -224,6 +259,12 @@ async def _handle_stop_summary(event: Any, client: Any) -> None:
 
     link = make_share_url(bot_token=config.telegram_bot_token, share_id=share_id)
 
+    # Diff snapshot: save rolling iteration anchor + first-time session
+    # anchor. If save fails (non-git workspace), we just skip the diff link.
+    diff_link = await _maybe_save_diff_snapshots(
+        window_id=window_id, bot_token=config.telegram_bot_token
+    )
+
     for _user_id, thread_id, chat_id in bindings:
         await _post_summary_message(
             client=client,
@@ -231,6 +272,7 @@ async def _handle_stop_summary(event: Any, client: Any) -> None:
             thread_id=thread_id,
             summary=short,
             link_url=link,
+            diff_url=diff_link,
         )
 
 
