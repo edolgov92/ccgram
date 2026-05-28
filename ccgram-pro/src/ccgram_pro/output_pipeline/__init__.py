@@ -20,5 +20,6 @@ ccgram itself; no patching needed for that one — we just default it on.
 """
 
 from .silencer import install_silencer
+from .summarizer import install_summarizer
 
-__all__ = ["install_silencer"]
+__all__ = ["install_silencer", "install_summarizer"]

@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from aiohttp import web
+from ccgram.miniapp.server import _BOT_TOKEN_KEY  # type: ignore[attr-defined]
 from ccgram_pro import extension, miniapp_factory
 
 
@@ -17,28 +19,35 @@ def test_install_is_idempotent_and_creates_layer_dirs(tmp_path: Path) -> None:
     assert (tmp_path / "layer" / "pr-loop").is_dir()
 
 
+def _stub_build_app_factory(captured: dict[str, Any]):
+    """Build a stub that captures kwargs but returns a real aiohttp Application
+    so :func:`ccgram_pro.web.register_view_routes` (which `make_factory`
+    now invokes) has something legal to attach routes to.
+    """
+
+    def stub_build_app(**kwargs: Any) -> web.Application:
+        captured.update(kwargs)
+        app = web.Application()
+        app[_BOT_TOKEN_KEY] = kwargs.get("bot_token", "stub")
+        return app
+
+    return stub_build_app
+
+
 def test_make_factory_passes_through_kwargs() -> None:
     captured: dict[str, Any] = {}
-
-    def stub_build_app(**kwargs: Any) -> object:
-        captured.update(kwargs)
-        return "fake-app"
-
-    factory = miniapp_factory.make_factory(stub_build_app)
+    factory = miniapp_factory.make_factory(_stub_build_app_factory(captured))
     result = factory(bot_token="abc")
-    assert result == "fake-app"
+    assert isinstance(result, web.Application)
     assert captured == {"bot_token": "abc"}
+    # Layer route was registered on the returned app.
+    assert any("/view/" in (r.resource.canonical or "") for r in result.router.routes())
 
 
 def test_make_factory_forwards_arbitrary_keywords() -> None:
     """Future build_app params (terminal_capture etc.) must flow through."""
     captured: dict[str, Any] = {}
-
-    def stub_build_app(**kwargs: Any) -> object:
-        captured.update(kwargs)
-        return "ok"
-
-    factory = miniapp_factory.make_factory(stub_build_app)
+    factory = miniapp_factory.make_factory(_stub_build_app_factory(captured))
     factory(bot_token="x", terminal_capture="cap", pane_list="pl")
     assert captured == {"bot_token": "x", "terminal_capture": "cap", "pane_list": "pl"}
 
