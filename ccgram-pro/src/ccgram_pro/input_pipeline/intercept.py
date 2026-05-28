@@ -168,8 +168,9 @@ async def _wrapped_forward_message(
                     thread_id=thread_id,
                 )
         return
-    # Lazy: ack reaction has no other batch-time dependency.
-    from ccgram.handlers.reactions import ack_reaction
+    # Lazy: ack_reaction is exported from message_sender, not reactions
+    # (the helper composes config.ack_reaction with set_message_reaction).
+    from ccgram.handlers.messaging_pipeline.message_sender import ack_reaction
 
     await ack_reaction(client, message.chat.id, message.message_id)
     total, _idx = await __import__(
