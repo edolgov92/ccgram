@@ -253,6 +253,10 @@ class Defaults:
     batch_mode: bool = True
     plan_mode_on_new_session: bool = True
     preamble: str = _DEFAULT_PREAMBLE
+    # Live "🔧 Working… (Ns)" bubble while Claude processes a turn. Off by
+    # default — the 👀 ack reaction on the user's own message is enough of
+    # an "I'm on it" signal, and an edit-in-place bubble reads as spam.
+    progress_bubble: bool = False
 
 
 @dataclass(frozen=True)
@@ -304,6 +308,7 @@ def load_settings(path: Path | None = None) -> Settings:
         batch_mode=_coerce_bool(d.get("batch_mode"), True),
         plan_mode_on_new_session=_coerce_bool(d.get("plan_mode_on_new_session"), True),
         preamble=_coerce_str(d.get("preamble"), _DEFAULT_PREAMBLE),
+        progress_bubble=_coerce_bool(d.get("progress_bubble"), False),
     )
     voice = VoiceSettings(
         transcription_note=_coerce_str(
