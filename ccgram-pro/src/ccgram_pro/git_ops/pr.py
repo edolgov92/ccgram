@@ -23,7 +23,9 @@ class PullRequestSummary:
     base_ref: str
 
 
-def list_pull_requests(repo: Path | str, *, state: str = "open") -> list[PullRequestSummary]:
+def list_pull_requests(
+    repo: Path | str, *, state: str = "open"
+) -> list[PullRequestSummary]:
     """List PRs for the repo at *repo* (defaults to the current cwd)."""
     fields = "number,title,state,url,headRefName,baseRefName"
     try:

@@ -35,8 +35,13 @@ def install_layer_commands(application: "Application") -> None:
     # Lazy: PTB types are only needed at register time.
     from telegram.ext import CommandHandler
 
+    # Lazy: deferred to avoid a heavy/cyclic import at module load.
     from .model_command import model_command
+
+    # Lazy: deferred to avoid a heavy/cyclic import at module load.
     from .pr_fix_command import pr_fix_command, pr_log_command
+
+    # Lazy: deferred to avoid a heavy/cyclic import at module load.
     from .project_command import project_command
 
     # PTB / Telegram command names: ``[a-z0-9_]{1,32}``. No hyphens, so we
@@ -48,24 +53,24 @@ def install_layer_commands(application: "Application") -> None:
     application.add_handler(CommandHandler("pr_log", pr_log_command))
 
     # The callback handlers piggy-back on the same dispatch hierarchy.
+    # Lazy: PTB types only needed on the handler/send path.
     from telegram.ext import CallbackQueryHandler
 
+    # Lazy: deferred to avoid a heavy/cyclic import at module load.
     from .project_command import project_picker_callback
+
+    # Lazy: deferred to avoid a heavy/cyclic import at module load.
     from .model_command import model_picker_callback
 
     application.add_handler(
-        CallbackQueryHandler(
-            project_picker_callback, pattern=r"^ccgrampro:project:"
-        )
+        CallbackQueryHandler(project_picker_callback, pattern=r"^ccgrampro:project:")
     )
     application.add_handler(
         CallbackQueryHandler(model_picker_callback, pattern=r"^ccgrampro:model:")
     )
 
     _installed = True
-    logger.info(
-        "ccgram-pro layer commands registered: /project /model /pr-fix /pr-log"
-    )
+    logger.info("ccgram-pro layer commands registered: /project /model /pr-fix /pr-log")
 
 
 def _reset_for_testing() -> None:

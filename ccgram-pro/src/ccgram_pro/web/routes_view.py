@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import html
+import json
 import re
 from typing import TYPE_CHECKING
 
@@ -25,14 +26,35 @@ import structlog
 
 from ccgram.miniapp.server import _BOT_TOKEN_KEY  # type: ignore[attr-defined]
 
+from ..output_pipeline.transcript_events import events_from_dicts
 from ..share.links import resolve_token
-from ..share.tokens import InvalidShareToken
 from ..share.store import ShareNotFound
+from ..share.tokens import InvalidShareToken
+from .transcript_render import render_events_html, transcript_css
 
 if TYPE_CHECKING:
     from aiohttp import web
 
 logger = structlog.get_logger()
+
+
+def _render_share_body(body: str) -> tuple[str, bool]:
+    """Return ``(html, is_transcript)`` for a share body.
+
+    New shares store a JSON envelope ``{"v": 2, "events": [...]}`` →
+    rendered as a rich chat transcript. Legacy shares (or any other
+    kind) store markdown → rendered with the minimal markdown pass.
+    """
+    stripped = body.lstrip()
+    if stripped.startswith("{"):
+        try:
+            data = json.loads(body)
+        except json.JSONDecodeError:
+            data = None
+        if isinstance(data, dict) and isinstance(data.get("events"), list):
+            events = events_from_dicts(data["events"])
+            return render_events_html(events), True
+    return _render_markdown(body), False
 
 
 def _render_markdown(body: str) -> str:
@@ -99,6 +121,7 @@ _PAGE_TEMPLATE = """\
   article pre code {{ background: none; padding: 0; font-size: 0.9em; }}
   footer {{ margin-top: 40px; padding-top: 16px; border-top: 1px solid var(--border);
             color: var(--muted); font-size: 0.78rem; }}
+{transcript_css}
 </style>
 </head>
 <body>
@@ -107,9 +130,7 @@ _PAGE_TEMPLATE = """\
     <h1>{title}</h1>
     <div class="meta">Kind: <code>{kind}</code> · Created {created} · Window: <code>{window_id}</code></div>
   </header>
-  <article>
-    {body_html}
-  </article>
+  {body_html}
   <footer>ccgram-pro share · token expires 3 days from issue · refresh to revoke caching</footer>
 </main>
 </body>
@@ -126,6 +147,7 @@ def _format_created(epoch: float) -> str:
 
 
 async def _handle_view(request: "web.Request") -> "web.Response":
+    # Lazy: aiohttp only needed inside the request handler.
     from aiohttp import web
 
     token = request.match_info.get("token", "")
@@ -139,12 +161,19 @@ async def _handle_view(request: "web.Request") -> "web.Response":
     except ShareNotFound:
         return web.Response(status=404, text="share not found")
 
+    body_html, is_transcript = _render_share_body(record.body_markdown)
+    # Markdown shares get wrapped in <article> for paragraph styling;
+    # transcripts bring their own .transcript container.
+    if not is_transcript:
+        body_html = f"<article>{body_html}</article>"
+
     page = _PAGE_TEMPLATE.format(
         title=html.escape(record.title or "ccgram share"),
         kind=html.escape(record.kind),
         created=html.escape(_format_created(record.created_at)),
         window_id=html.escape(record.window_id or "—"),
-        body_html=_render_markdown(record.body_markdown),
+        body_html=body_html,
+        transcript_css=transcript_css(),
     )
     return web.Response(text=page, content_type="text/html")
 

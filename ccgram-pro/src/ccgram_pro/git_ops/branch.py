@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from ._run import GitOpError, run_git
+from ._run import run_git
 
 
 @dataclass(frozen=True)

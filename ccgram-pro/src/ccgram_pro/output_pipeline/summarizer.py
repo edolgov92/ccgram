@@ -116,7 +116,7 @@ async def _safe_llm_summary(transcript_path: str) -> str | None:
             summarize_completion(transcript_path),
             timeout=_LLM_SUMMARY_TIMEOUT_SECONDS,
         )
-    except (TimeoutError, RuntimeError, OSError, ValueError):
+    except TimeoutError, RuntimeError, OSError, ValueError:
         logger.debug("LLM summary unavailable", exc_info=True)
         return None
 
@@ -133,6 +133,8 @@ async def _post_summary_message(
     """Send the single Stop summary message with View-full and Diff buttons."""
     # Lazy: PTB types pulled in only on the actual send path.
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+    # Lazy: PTB types only needed on the handler/send path.
     from telegram.error import TelegramError
 
     buttons: list[InlineKeyboardButton] = []
@@ -158,10 +160,19 @@ async def _maybe_save_diff_snapshots(*, window_id: str, bot_token: str) -> str |
     # Lazy: git_ops pulls subprocess; only needed if we actually have a repo.
     from ccgram.window_query import view_window
 
+    # Lazy: deferred to avoid a heavy/cyclic import at module load.
     from ..git_ops import save_snapshot
+
+    # Lazy: deferred to avoid a heavy/cyclic import at module load.
     from ..git_ops._run import GitOpError
+
+    # Lazy: deferred to avoid a heavy/cyclic import at module load.
     from ..git_ops.snapshot import list_snapshots
+
+    # Lazy: deferred to avoid a heavy/cyclic import at module load.
     from ..share.links import _miniapp_base_url
+
+    # Lazy: deferred to avoid a heavy/cyclic import at module load.
     from ..share.tokens import sign_share_token
 
     view = view_window(window_id)
@@ -171,9 +182,7 @@ async def _maybe_save_diff_snapshots(*, window_id: str, bot_token: str) -> str |
     existing = list_snapshots(window_id)
     try:
         if "session" not in existing:
-            save_snapshot(
-                window_id=window_id, label="session", project_root=view.cwd
-            )
+            save_snapshot(window_id=window_id, label="session", project_root=view.cwd)
         save_snapshot(window_id=window_id, label="iteration", project_root=view.cwd)
     except (GitOpError, ValueError) as exc:
         logger.debug("diff snapshot save failed for %s: %s", window_id, exc)
@@ -200,7 +209,11 @@ def _extract_last_assistant_text_and_tool_count(
     Claude's response is "brief and self-contained" vs "did real work".
     """
     try:
-        lines = Path(transcript_path).read_text(encoding="utf-8", errors="replace").splitlines()
+        lines = (
+            Path(transcript_path)
+            .read_text(encoding="utf-8", errors="replace")
+            .splitlines()
+        )
     except OSError:
         return "", 0
     text_chunks: list[str] = []
@@ -234,6 +247,8 @@ async def _handle_stop_summary(event: Any, client: Any) -> None:
     """The layer-owned Stop handler. Reads transcript, sends one summary."""
     # Lazy: thread_router is wired by ccgram bootstrap.
     from ccgram.thread_router import thread_router
+
+    # Lazy: ccgram internal — deferred to avoid an import cycle with ccgram bootstrap (the layer is imported during bootstrap).
     from ccgram.window_query import view_window
 
     # event.window_key is "<session>:<window_id>"; window_id is the second part.
@@ -274,6 +289,7 @@ async def _handle_stop_summary(event: Any, client: Any) -> None:
 
     # Tear down the live "🔧 Working…" bubble before posting the final
     # summary message, so the user sees one clean transition.
+    # Lazy: deferred to avoid a heavy/cyclic import at module load.
     from . import progress_bubble
 
     bot_for_cleanup = None
@@ -290,16 +306,25 @@ async def _handle_stop_summary(event: Any, client: Any) -> None:
     #   with?" turn).
     # - Did real work (tool calls or long text) → ask the LLM for a
     #   one-line summary so the user gets a digestible message.
-    last_text, tool_count = _extract_last_assistant_text_and_tool_count(
-        transcript_path
+    last_text, tool_count = _extract_last_assistant_text_and_tool_count(transcript_path)
+    is_brief_turn = (
+        tool_count == 0 and 0 < len(last_text) <= _BRIEF_TURN_THRESHOLD_CHARS
     )
-    is_brief_turn = tool_count == 0 and 0 < len(last_text) <= _BRIEF_TURN_THRESHOLD_CHARS
 
-    long_markdown = _build_long_view_markdown(transcript_path, num_turns)
+    # Store the turn as STRUCTURED events (JSON) so the /view page can
+    # render a rich chat transcript instead of a flat text dump.
+    # Lazy: transcript_events pulls only stdlib + dataclasses.
+    from .transcript_events import events_to_dicts, extract_events
+
+    events = extract_events(transcript_path)
+    share_body = json.dumps(
+        {"v": 2, "num_turns": num_turns, "events": events_to_dicts(events)},
+        ensure_ascii=False,
+    )
     share_id = save_share(
         kind="claude-turn",
         title=f"Claude turn · {window_id}",
-        body_markdown=long_markdown,
+        body_markdown=share_body,
         window_id=window_id,
     )
 
@@ -314,8 +339,10 @@ async def _handle_stop_summary(event: Any, client: Any) -> None:
             # first line + ellipsis to avoid the "✅ No coding activity"
             # garbage we used to post.
             first_line = last_text.splitlines()[0].strip()
-            short = first_line if len(first_line) <= _MAX_INLINE_TEXT_CHARS else (
-                first_line[: _MAX_INLINE_TEXT_CHARS - 1].rstrip() + "…"
+            short = (
+                first_line
+                if len(first_line) <= _MAX_INLINE_TEXT_CHARS
+                else (first_line[: _MAX_INLINE_TEXT_CHARS - 1].rstrip() + "…")
             )
         else:
             short = "✅ Done."

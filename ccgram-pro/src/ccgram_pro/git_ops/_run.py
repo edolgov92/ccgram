@@ -71,7 +71,9 @@ def _run(
     except subprocess.TimeoutExpired as exc:
         raise GitOpError(cmd, 124, f"timed out after {timeout}s") from exc
     result = RunResult(
-        stdout=completed.stdout, stderr=completed.stderr, returncode=completed.returncode
+        stdout=completed.stdout,
+        stderr=completed.stderr,
+        returncode=completed.returncode,
     )
     if check and completed.returncode != 0:
         raise GitOpError(cmd, completed.returncode, completed.stderr)

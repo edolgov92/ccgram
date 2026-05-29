@@ -16,6 +16,7 @@ no idea if anything is happening".
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -131,10 +132,9 @@ async def stop_bubble(window_id: str, bot: Any) -> None:
     if bubble is None:
         return
     bubble.task.cancel()
-    try:
+    # Tolerate any exit reason from the cancelled tick loop.
+    with contextlib.suppress(BaseException):
         await bubble.task
-    except (asyncio.CancelledError, BaseException):  # noqa: BLE001 -- tolerate any exit reason
-        pass
     try:
         await bot.delete_message(chat_id=bubble.chat_id, message_id=bubble.message_id)
     except Exception:  # noqa: BLE001 -- if the delete fails it's fine, summary replaces it

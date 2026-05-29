@@ -39,7 +39,9 @@ def _stat_for(file: DiffFile) -> tuple[int, int]:
     return adds, dels
 
 
-def render_diff_html(files: list[DiffFile], *, empty_message: str = "No changes.") -> str:
+def render_diff_html(
+    files: list[DiffFile], *, empty_message: str = "No changes."
+) -> str:
     """Return the HTML body for a list of parsed diff files."""
     if not files:
         return f'<p style="color: var(--muted);">{html.escape(empty_message)}</p>'
@@ -89,9 +91,7 @@ def _render_file(file: DiffFile, idx: int) -> str:
         old_no = hunk.old_start
         new_no = hunk.new_start
         for marker, content in hunk.lines:
-            row_class = (
-                "add" if marker == "+" else ("del" if marker == "-" else "")
-            )
+            row_class = "add" if marker == "+" else ("del" if marker == "-" else "")
             if marker == "+":
                 gutter = f"+{new_no}"
                 new_no += 1

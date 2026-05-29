@@ -65,8 +65,14 @@ async def pr_fix_command(
     """Trigger the PR review loop on the bound Claude window."""
     # Lazy: avoid an import of the ccgram internal package at module load.
     from ccgram.handlers.callback_helpers import get_thread_id
+
+    # Lazy: ccgram internal — deferred to avoid an import cycle with ccgram bootstrap (the layer is imported during bootstrap).
     from ccgram.handlers.text.text_handler import _forward_message
+
+    # Lazy: ccgram internal — deferred to avoid an import cycle with ccgram bootstrap (the layer is imported during bootstrap).
     from ccgram.telegram_client import PTBTelegramClient
+
+    # Lazy: ccgram internal — deferred to avoid an import cycle with ccgram bootstrap (the layer is imported during bootstrap).
     from ccgram.thread_router import thread_router
 
     if update.message is None or update.effective_user is None:

@@ -80,8 +80,7 @@ def test_parse_unified_diff_simple_add(tmp_path: Path) -> None:
 
 def test_parse_unified_diff_binary(tmp_path: Path) -> None:
     raw = (
-        "diff --git a/img.png b/img.png\n"
-        "Binary files a/img.png and b/img.png differ\n"
+        "diff --git a/img.png b/img.png\nBinary files a/img.png and b/img.png differ\n"
     )
     files = parse_unified_diff(raw)
     assert len(files) == 1

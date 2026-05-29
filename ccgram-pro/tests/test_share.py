@@ -65,9 +65,13 @@ def test_verify_rejects_wrong_purpose_via_replay() -> None:
     body_b64, sig_b64 = token.split(".")
     body = json.loads(base64.urlsafe_b64decode(body_b64 + "==").decode())
     body["p"] = "window"  # try to replay as a window token
-    tampered_body = base64.urlsafe_b64encode(
-        json.dumps(body, separators=(",", ":"), sort_keys=True).encode()
-    ).rstrip(b"=").decode()
+    tampered_body = (
+        base64.urlsafe_b64encode(
+            json.dumps(body, separators=(",", ":"), sort_keys=True).encode()
+        )
+        .rstrip(b"=")
+        .decode()
+    )
     with pytest.raises(InvalidShareToken):
         verify_share_token(f"{tampered_body}.{sig_b64}", bot_token=_BOT)
 
@@ -210,7 +214,11 @@ class TestViewRoute(AioHTTPTestCase):
         )
         token = sign_share_token(bot_token=_BOT, share_id=share_id)
         async with self.client.get(f"/view/{token}") as resp:
-            body = await resp.text().__aiter__().__anext__() if False else await resp.text()
+            body = (
+                await resp.text().__aiter__().__anext__()
+                if False
+                else await resp.text()
+            )
             # No live tags from user content — both title and body content
             # are rendered as escaped text, not as HTML.
             assert "<script>alert(1)" not in body

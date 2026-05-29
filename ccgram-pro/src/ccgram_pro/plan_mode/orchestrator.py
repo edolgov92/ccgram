@@ -57,12 +57,11 @@ async def _wait_for_prompt_ready(window_id: str) -> str | None:
 
 async def _send_shift_tab(window_id: str) -> bool:
     """Send the Shift+Tab key sequence to the window. Returns success."""
+    # Lazy: ccgram internal — deferred to avoid an import cycle with ccgram bootstrap (the layer is imported during bootstrap).
     from ccgram.tmux_manager import tmux_manager
 
     try:
-        await tmux_manager.send_keys(
-            window_id, "BTab", literal=False, enter=False
-        )
+        await tmux_manager.send_keys(window_id, "BTab", literal=False, enter=False)
     except Exception:  # noqa: BLE001 -- tmux flake should be loud but non-fatal
         logger.warning("plan-mode BTab failed for %s", window_id, exc_info=True)
         return False
@@ -71,6 +70,7 @@ async def _send_shift_tab(window_id: str) -> bool:
 
 async def _verify_plan_mode(window_id: str) -> bool:
     """Re-poll the mode label; return True when it says plan."""
+    # Lazy: ccgram internal — deferred to avoid an import cycle with ccgram bootstrap (the layer is imported during bootstrap).
     from ccgram.providers.claude import ClaudeProvider
 
     provider = ClaudeProvider()
@@ -152,11 +152,12 @@ def install_plan_mode_entry() -> None:
 
     async def wrapped(*args: Any, **kwargs: Any) -> Any:
         result = await original(*args, **kwargs)
-        # The function signature is positional: (query, user_id,
-        # selected_path, provider_name, approval_mode, context). Pull
-        # provider_name out by index OR keyword for safety.
+        # _create_window_and_bind signature is positional:
+        # (query, user_id, selected_path, provider_name, approval_mode,
+        # context) → provider_name is the 4th positional (index 3).
+        provider_name_pos = 4
         provider_name = ""
-        if len(args) >= 4:
+        if len(args) >= provider_name_pos:
             provider_name = str(args[3])
         elif "provider_name" in kwargs:
             provider_name = str(kwargs["provider_name"])
@@ -165,6 +166,7 @@ def install_plan_mode_entry() -> None:
         # The most recently-created window id is the one we want. Walk
         # tmux's window state — ccgram's bookkeeping has not necessarily
         # propagated yet at this point.
+        # Lazy: ccgram internal — deferred to avoid an import cycle with ccgram bootstrap (the layer is imported during bootstrap).
         from ccgram.tmux_manager import tmux_manager
 
         try:

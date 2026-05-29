@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import json
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 import structlog
@@ -47,6 +47,7 @@ class SnapshotNotFound(LookupError):
 
 def _window_dir(window_id: str) -> Path:
     # Reuse mailbox sanitisation rules — same as elsewhere in the layer.
+    # Lazy: ccgram internal — deferred to avoid an import cycle with ccgram bootstrap (the layer is imported during bootstrap).
     from ccgram.mailbox import sanitize_dir_name
 
     return snapshot_dir() / sanitize_dir_name(window_id)
@@ -133,9 +134,7 @@ def list_snapshots(window_id: str) -> list[str]:
     root = _window_dir(window_id)
     if not root.is_dir():
         return []
-    return sorted(
-        p.stem for p in root.iterdir() if p.suffix == ".json" and p.is_file()
-    )
+    return sorted(p.stem for p in root.iterdir() if p.suffix == ".json" and p.is_file())
 
 
 __all__ = [

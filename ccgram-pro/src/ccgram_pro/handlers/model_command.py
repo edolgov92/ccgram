@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import structlog
 
@@ -25,9 +25,8 @@ _MODEL_OPTIONS: list[tuple[str, str, str]] = [
 ]
 
 
-async def model_command(
-    update: "Update", context: "ContextTypes.DEFAULT_TYPE"
-) -> None:
+async def model_command(update: "Update", context: "ContextTypes.DEFAULT_TYPE") -> None:
+    # Lazy: PTB types only needed on the handler/send path.
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
     del context
@@ -35,16 +34,11 @@ async def model_command(
     if update.message is None:
         return
     buttons = [
-        [
-            InlineKeyboardButton(
-                label, callback_data=f"{_PREFIX}{idx}"
-            )
-        ]
+        [InlineKeyboardButton(label, callback_data=f"{_PREFIX}{idx}")]
         for idx, (label, _, _) in enumerate(_MODEL_OPTIONS)
     ]
     await update.message.reply_text(
-        "*🧠 Pick a model + reasoning*\n\n"
-        "_Applies to your next topic creation._",
+        "*🧠 Pick a model + reasoning*\n\n_Applies to your next topic creation._",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(buttons),
     )

@@ -212,11 +212,9 @@ def _handle_new_message_silent(msg: object, *_args: Any, **_kwargs: Any) -> bool
     session_id = getattr(msg, "session_id", "")
     if not session_id:
         return False
-    if not _is_silent_for_session(session_id):
-        return False
-    # Suppress everything ccgram would route through here in silent mode.
-    # The Stop summarizer is what the user sees instead.
-    return True
+    # Suppress everything ccgram would route through here in silent mode;
+    # the Stop summarizer is what the user sees instead.
+    return _is_silent_for_session(session_id)
 
 
 # ── Install / uninstall ────────────────────────────────────────────────
@@ -240,7 +238,11 @@ def install_silencer() -> None:
     # Lazy: pulling these imports inside install() keeps the silencer
     # module safe to import in tests that don't want PTB / aiohttp loaded.
     from ccgram.handlers.messaging_pipeline import message_queue as message_queue_mod
+
+    # Lazy: ccgram internal — deferred to avoid an import cycle with ccgram bootstrap (the layer is imported during bootstrap).
     from ccgram.handlers.polling.window_tick import apply as apply_mod
+
+    # Lazy: ccgram internal — deferred to avoid an import cycle with ccgram bootstrap (the layer is imported during bootstrap).
     from ccgram.handlers.status import topic_emoji as topic_emoji_mod
 
     # 1) Topic emoji renames. ALL importers of update_topic_emoji.
@@ -248,6 +250,7 @@ def install_silencer() -> None:
     silenced_topic_emoji = _wrap_async(
         "update_topic_emoji", original_topic_emoji, _topic_emoji_silent
     )
+    # Lazy: ccgram internal — deferred to avoid an import cycle with ccgram bootstrap (the layer is imported during bootstrap).
     from ccgram.handlers import hook_events as hook_events_mod
 
     for mod in (apply_mod, topic_emoji_mod, hook_events_mod):
@@ -260,9 +263,16 @@ def install_silencer() -> None:
     silenced_status_update = _wrap_async(
         "enqueue_status_update", original_status_update, _status_update_silent
     )
+    # Lazy: ccgram internal — deferred to avoid an import cycle with ccgram bootstrap (the layer is imported during bootstrap).
     from ccgram.handlers import cleanup as cleanup_mod
+
+    # Lazy: ccgram internal — deferred to avoid an import cycle with ccgram bootstrap (the layer is imported during bootstrap).
     from ccgram.handlers.commands import forward as forward_mod
+
+    # Lazy: ccgram internal — deferred to avoid an import cycle with ccgram bootstrap (the layer is imported during bootstrap).
     from ccgram.handlers.shell import shell_commands as shell_commands_mod
+
+    # Lazy: ccgram internal — deferred to avoid an import cycle with ccgram bootstrap (the layer is imported during bootstrap).
     from ccgram.handlers.text import text_handler as text_handler_mod
 
     for mod in (
@@ -289,7 +299,10 @@ def install_silencer() -> None:
     # closure. Patching bootstrap.handle_new_message is the magic that
     # actually takes effect, since the closure resolves the name via
     # bootstrap's module globals at each call.
+    # Lazy: ccgram internal — deferred to avoid an import cycle with ccgram bootstrap (the layer is imported during bootstrap).
     from ccgram import bootstrap as bootstrap_mod
+
+    # Lazy: ccgram internal — deferred to avoid an import cycle with ccgram bootstrap (the layer is imported during bootstrap).
     from ccgram.handlers.messaging_pipeline import (
         message_routing as message_routing_mod,
     )

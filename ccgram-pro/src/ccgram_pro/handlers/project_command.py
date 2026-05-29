@@ -8,7 +8,7 @@ of project metadata.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import structlog
 
@@ -31,6 +31,7 @@ async def project_command(
     update: "Update", context: "ContextTypes.DEFAULT_TYPE"
 ) -> None:
     """Render the predefined-projects keyboard."""
+    # Lazy: PTB types only needed on the handler/send path.
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
     del context  # not used — picker has no per-call state today

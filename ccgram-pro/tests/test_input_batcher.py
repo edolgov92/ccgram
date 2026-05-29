@@ -15,9 +15,7 @@ from ccgram_pro.input_pipeline.batcher import (
 @pytest.fixture
 def sidecar():
     """A fresh sidecar with batch_mode + silent_mode default-on."""
-    state.save(
-        state.WindowSidecar(window_id="@b", window_creation_epoch=0.0)
-    )
+    state.save(state.WindowSidecar(window_id="@b", window_creation_epoch=0.0))
     return state.load("@b")
 
 
