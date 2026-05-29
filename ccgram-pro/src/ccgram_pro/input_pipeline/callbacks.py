@@ -96,13 +96,13 @@ async def _do_flush(
     )
     await query.answer("Sent")
 
-    # Kick off the live "🔧 Working…" bubble so the user has a heartbeat
-    # while Claude processes the batched prompt. Cancelled by the Stop
-    # summarizer once the agent finishes.
+    # Optionally kick off the live "🔧 Working…" bubble. Off by default —
+    # the ack reaction is the heartbeat; the bubble reads as spam.
+    from ..config import load_settings
     from ..output_pipeline import progress_bubble
 
     chat_id = query.message.chat.id if query.message else None
-    if chat_id is not None:
+    if chat_id is not None and load_settings().defaults.progress_bubble:
         await progress_bubble.start_bubble(
             window_id=window_id,
             bot=context.bot,

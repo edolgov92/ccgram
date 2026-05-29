@@ -155,10 +155,14 @@ async def _wrapped_forward_message(
         )
         # Lazy: progress_bubble is part of the output pipeline; deferring
         # the import keeps the input package free of an extra cross-edge.
+        from ..config import load_settings
         from ..output_pipeline import progress_bubble
         from .silencer_guard import is_silent_for_window
 
-        if is_silent_for_window(window_id):
+        if (
+            load_settings().defaults.progress_bubble
+            and is_silent_for_window(window_id)
+        ):
             bot = message.get_bot() if hasattr(message, "get_bot") else None
             if bot is not None:
                 await progress_bubble.start_bubble(
