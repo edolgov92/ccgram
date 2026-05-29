@@ -122,44 +122,76 @@ _PAGE_TEMPLATE = """\
 <title>{title}</title>
 <style>
   :root {{
-    color-scheme: dark light;
-    --bg: #0d1117;
-    --fg: #e6edf3;
-    --muted: #8b949e;
-    --accent: #58a6ff;
-    --code-bg: #161b22;
-    --border: #30363d;
+    color-scheme: dark;
+    --bg: #0a0c10;
+    --bg-grad: radial-gradient(1200px 600px at 50% -10%, #141926 0%, #0a0c10 60%);
+    --surface: #12151d;
+    --elevated: #171b25;
+    --fg: #eceef4;
+    --muted: #99a1b3;
+    --faint: #6b7280;
+    --accent: #8aa6ff;
+    --accent-2: #b69cff;
+    --border: #232936;
+    --border-soft: #1b212c;
+    --radius: 16px;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.22);
+    --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+            "Helvetica Neue", Arial, "Inter", sans-serif;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code",
+            Menlo, Consolas, monospace;
   }}
   * {{ box-sizing: border-box; }}
-  html, body {{ margin: 0; padding: 0; background: var(--bg); color: var(--fg);
-              font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }}
-  main {{ max-width: 760px; margin: 0 auto; padding: 24px 18px 80px; }}
-  header {{ border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }}
-  h1 {{ font-size: 1.25rem; margin: 0 0 6px; word-break: break-word; }}
-  .meta {{ color: var(--muted); font-size: 0.85rem; }}
-  .meta a {{ color: var(--accent); text-decoration: none; }}
+  html {{ -webkit-text-size-adjust: 100%; }}
+  body {{ margin: 0; background: var(--bg); background-image: var(--bg-grad);
+          background-attachment: fixed; color: var(--fg); font-family: var(--font);
+          font-size: 15.5px; line-height: 1.62; letter-spacing: 0.005em;
+          -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }}
+  main {{ max-width: 768px; margin: 0 auto; padding: 0 16px 96px; }}
+  header {{ position: sticky; top: 0; z-index: 10; margin: 0 -16px 22px;
+            padding: 16px 16px 14px; background: rgba(10,12,16,.72);
+            backdrop-filter: saturate(140%) blur(14px);
+            -webkit-backdrop-filter: saturate(140%) blur(14px);
+            border-bottom: 1px solid var(--border-soft); }}
+  h1 {{ font-size: 1.16rem; font-weight: 650; letter-spacing: -0.01em;
+        margin: 0 0 8px; word-break: break-word;
+        background: linear-gradient(92deg, var(--fg), #c7cede);
+        -webkit-background-clip: text; background-clip: text;
+        -webkit-text-fill-color: transparent; }}
+  .meta {{ display: flex; flex-wrap: wrap; gap: 6px; }}
+  .meta .chip {{ font-size: 0.72rem; color: var(--muted); background: var(--surface);
+                 border: 1px solid var(--border-soft); border-radius: 999px;
+                 padding: 3px 10px; white-space: nowrap; }}
+  .meta .chip code {{ color: var(--accent); font-family: var(--mono); font-size: 0.92em; }}
   article p {{ margin: 0 0 1em; word-wrap: break-word; }}
-  article code {{ background: var(--code-bg); padding: 1px 6px; border-radius: 4px;
-                font-family: "SF Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-                font-size: 0.92em; }}
-  article pre {{ background: var(--code-bg); padding: 12px 14px; border-radius: 8px;
-                overflow-x: auto; border: 1px solid var(--border); margin: 0 0 1em; }}
+  article code {{ background: var(--elevated); padding: 1.5px 6px; border-radius: 6px;
+                font-family: var(--mono); font-size: 0.9em; }}
+  article pre {{ background: var(--surface); padding: 13px 15px; border-radius: 12px;
+                overflow-x: auto; border: 1px solid var(--border-soft); margin: 0 0 1em; }}
   article pre code {{ background: none; padding: 0; font-size: 0.9em; }}
-  footer {{ margin-top: 40px; padding-top: 16px; border-top: 1px solid var(--border);
-            color: var(--muted); font-size: 0.78rem; }}
+  footer {{ margin-top: 44px; padding-top: 18px; border-top: 1px solid var(--border-soft);
+            color: var(--faint); font-size: 0.76rem; text-align: center; }}
 {transcript_css}
-  .load-older {{ display: block; text-align: center; padding: 10px; margin-bottom: 8px;
-                 color: var(--accent); text-decoration: none; font-size: 0.85rem;
-                 border: 1px dashed var(--border); border-radius: 8px; }}
-  .load-older:hover {{ background: var(--code-bg); }}
-  .load-older.done {{ color: var(--muted); border-style: solid; pointer-events: none; }}
+  .load-older {{ display: block; width: max-content; max-width: 100%;
+                 margin: 0 auto 16px; padding: 9px 18px; color: var(--accent);
+                 text-decoration: none; font-size: 0.83rem; font-weight: 550;
+                 background: var(--surface); border: 1px solid var(--border);
+                 border-radius: 999px; transition: transform .12s ease, background .12s ease; }}
+  .load-older:hover {{ background: var(--elevated); transform: translateY(-1px); }}
+  .load-older:active {{ transform: translateY(0); }}
+  .load-older.done {{ color: var(--faint); background: transparent; border-style: dashed;
+                      pointer-events: none; }}
 </style>
 </head>
 <body>
 <main>
   <header>
     <h1>{title}</h1>
-    <div class="meta">Kind: <code>{kind}</code> · Created {created} · Window: <code>{window_id}</code> · {total} message(s)</div>
+    <div class="meta">
+      <span class="chip">💬 {total} message(s)</span>
+      <span class="chip"><code>{window_id}</code></span>
+      <span class="chip">{created}</span>
+    </div>
   </header>
   {older_link}
   <div class="transcript" id="transcript">{rows_html}</div>
