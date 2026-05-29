@@ -281,8 +281,10 @@ def install_input_pipeline(application: "Application") -> None:
     # Lazy: deferred to avoid a heavy/cyclic import at module load.
     from .callbacks import handle_batch_callback
 
+    # group=-10: run before ccgram's catch-all CallbackQueryHandler (group 0).
     application.add_handler(
-        CallbackQueryHandler(handle_batch_callback, pattern=r"^ccgrampro:batch:")
+        CallbackQueryHandler(handle_batch_callback, pattern=r"^ccgrampro:batch:"),
+        group=-10,
     )
 
     _installed = True

@@ -78,6 +78,9 @@ max-complexity = 10
 "src/ccgram_pro/share/tokens.py" = ["N818"]
 "src/ccgram_pro/output_pipeline/transcript_events.py" = ["C901", "PLR0912"]
 "src/ccgram_pro/output_pipeline/summarizer.py" = ["C901", "PLR0912"]
+# Picker callback dispatch (radio rows) + positional-arg unwrap of the
+# wrapped _create_window_and_bind.
+"src/ccgram_pro/new_session.py" = ["C901", "PLR2004"]
 # Small, readable threshold constants inline in handlers.
 "src/ccgram_pro/handlers/pr_fix_command.py" = ["PLR2004"]
 "src/ccgram_pro/input_pipeline/callbacks.py" = ["PLR2004"]

@@ -28,12 +28,13 @@ def test_install_is_idempotent_and_creates_layer_dirs(
         def __init__(self) -> None:
             self.job_queue = StubJobQueue()
 
-        def add_handler(self, h: Any) -> None:
-            handlers.append(h)
+        def add_handler(self, h: Any, group: int = 0) -> None:
+            handlers.append((group, h))
 
     # Avoid touching real ccgram modules from inside install_input_pipeline
     # by neutering the install guards on every wrapped subsystem.
     from ccgram_pro import handlers as layer_handlers_mod
+    from ccgram_pro import new_session as new_session_mod
     from ccgram_pro.input_pipeline import intercept as intercept_mod
     from ccgram_pro.output_pipeline import silencer as silencer_mod
     from ccgram_pro.output_pipeline import summarizer as summarizer_mod
@@ -44,6 +45,7 @@ def test_install_is_idempotent_and_creates_layer_dirs(
     summarizer_mod._reset_for_testing()
     plan_mode_mod._reset_for_testing()
     layer_handlers_mod._reset_for_testing()
+    new_session_mod._reset_for_testing()
 
     app = StubApplication()
     extension.install(app)  # type: ignore[arg-type]

@@ -31,7 +31,20 @@ def _parse_callback(data: str) -> tuple[str, str] | None:
 
 
 async def handle_batch_callback(update: Any, context: Any) -> None:
-    """Single entry-point for both Send and Clear buttons."""
+    """Send/Clear button entry-point, then stop further handlers.
+
+    Registered before ccgram's catch-all CallbackQueryHandler so this
+    runs first; ``ApplicationHandlerStop`` prevents the catch-all from
+    also processing the same callback.
+    """
+    # Lazy: PTB types only needed on the handler/send path.
+    from telegram.ext import ApplicationHandlerStop
+
+    await _dispatch_batch(update, context)
+    raise ApplicationHandlerStop
+
+
+async def _dispatch_batch(update: Any, context: Any) -> None:
     query = update.callback_query
     if query is None or not query.data:
         return

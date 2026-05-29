@@ -30,6 +30,7 @@ from . import __version__
 from .config import ensure_layer_dirs
 from .handlers import install_layer_commands
 from .input_pipeline import install_input_pipeline
+from .new_session import install_new_session
 from .output_pipeline import install_silencer, install_summarizer
 from .plan_mode import install_plan_mode_entry
 from .workspaces.runtime import schedule_gc
@@ -58,5 +59,9 @@ def install(application: Application) -> None:
     install_summarizer()
     install_input_pipeline(application)
     install_plan_mode_entry()
+    # After plan_mode so the new-session wrapper of _create_window_and_bind
+    # is outermost — it sets the model/effort override before plan_mode's
+    # wrapper calls the original (where resolve_launch_command reads it).
+    install_new_session(application)
     install_layer_commands(application)
     logger.info("ccgram-pro %s installed", __version__)

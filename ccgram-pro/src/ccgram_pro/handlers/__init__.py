@@ -37,15 +37,34 @@ def install_layer_commands(application: "Application") -> None:
         return
 
     # Lazy: PTB types are only needed at register time.
-    from telegram.ext import CommandHandler
+    from telegram.ext import ApplicationHandlerStop, CommandHandler
 
     # Lazy: deferred to avoid a heavy/cyclic import at module load.
     from .pr_fix_command import pr_fix_command, pr_log_command
 
+    def _stop_after(handler):  # noqa: ANN001, ANN202 -- thin PTB wrapper
+        """Run *handler*, then raise ApplicationHandlerStop.
+
+        Our CommandHandlers register in group -10 (before ccgram's
+        group-0 COMMAND-forward MessageHandler). Stopping propagation
+        keeps ccgram from also forwarding the command to the agent.
+        """
+
+        async def wrapped(update, context):  # noqa: ANN001, ANN202
+            await handler(update, context)
+            raise ApplicationHandlerStop
+
+        return wrapped
+
     # PTB / Telegram command names: ``[a-z0-9_]{1,32}`` — no hyphens, so
-    # the layer commands use snake_case.
-    application.add_handler(CommandHandler("pr_fix", pr_fix_command))
-    application.add_handler(CommandHandler("pr_log", pr_log_command))
+    # the layer commands use snake_case. group=-10 so they win over
+    # ccgram's COMMAND-forward fallback.
+    application.add_handler(
+        CommandHandler("pr_fix", _stop_after(pr_fix_command)), group=-10
+    )
+    application.add_handler(
+        CommandHandler("pr_log", _stop_after(pr_log_command)), group=-10
+    )
 
     _installed = True
     logger.info("ccgram-pro layer commands registered: /pr_fix /pr_log")
