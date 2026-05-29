@@ -29,6 +29,7 @@ from telegram import (
     Update,
 )
 from telegram.error import TelegramError
+from ...config import config
 from ...providers import registry as provider_registry
 from ...session import session_manager
 from ...session_map import session_map_sync
@@ -462,11 +463,60 @@ async def _handle_confirm(
         return
 
     # Show provider selection keyboard (keep browse state for _handle_provider_select)
-    await _show_provider_picker(query, selected_path)
+    await _show_provider_picker(query, selected_path, context=context)
 
 
-async def _show_provider_picker(query: CallbackQuery, selected_path: str) -> None:
-    """Edit the message to the provider picker for *selected_path*."""
+async def _show_provider_picker(
+    query: CallbackQuery,
+    selected_path: str,
+    *,
+    context: ContextTypes.DEFAULT_TYPE | None = None,
+) -> None:
+    """Advance the directory-browser flow after a directory is picked.
+
+    Three shapes, depending on environment configuration:
+
+    1. ``CCGRAM_FORCED_PROVIDER`` and ``CCGRAM_FORCED_APPROVAL_MODE`` both
+       set → no pickers; jump straight to window creation. *context* is
+       required for this branch (user_id + browse-state cleanup come
+       from there).
+    2. Only ``CCGRAM_FORCED_PROVIDER`` set → skip the "Select Provider"
+       keyboard and show the Standard/YOLO mode picker.
+    3. Neither set → original behaviour, show the provider picker.
+
+    The shell provider does not have a YOLO mode; if it is the forced
+    provider, the short-circuit cannot reach the mode picker, so the
+    function falls back to the full picker chain and logs a one-time
+    warning so the operator can fix their env.
+    """
+    forced_provider = config.forced_provider
+    forced_mode = config.forced_approval_mode
+
+    if forced_provider and provider_registry.is_valid(forced_provider):
+        # Lazy: providers package heavy bootstrap
+        from ...providers import has_yolo_mode
+
+        if has_yolo_mode(forced_provider):
+            if forced_mode in ("normal", "yolo") and context is not None:
+                user_id = query.from_user.id if query.from_user else None
+                if user_id is not None:
+                    clear_browse_state(context.user_data)
+                    await _create_window_and_bind(
+                        query,
+                        user_id,
+                        selected_path,
+                        forced_provider,
+                        forced_mode,
+                        context,
+                    )
+                    return
+            text, keyboard = build_mode_picker(selected_path, forced_provider)
+            await safe_edit(query, text, reply_markup=keyboard)
+            return
+        logger.warning(
+            "CCGRAM_FORCED_PROVIDER=%s has no YOLO mode; falling back to picker.",
+            forced_provider,
+        )
     text, keyboard = build_provider_picker(selected_path)
     await safe_edit(query, text, reply_markup=keyboard)
 
@@ -535,7 +585,7 @@ async def _handle_wt_use_current(
         await safe_edit(query, "❌ Worktree state lost. Tap Cancel and retry.")
         return
     clear_worktree_state(context.user_data)
-    await _show_provider_picker(query, selected_path)
+    await _show_provider_picker(query, selected_path, context=context)
 
 
 async def _handle_wt_new(
@@ -625,7 +675,7 @@ async def _handle_wt_confirm(
         branch,
         target_str,
     )
-    await _show_provider_picker(query, target_str)
+    await _show_provider_picker(query, target_str, context=context)
 
 
 async def _handle_wt_edit_name(

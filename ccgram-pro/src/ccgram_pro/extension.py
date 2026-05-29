@@ -28,6 +28,10 @@ import structlog
 
 from . import __version__
 from .config import ensure_layer_dirs
+from .handlers import install_layer_commands
+from .input_pipeline import install_input_pipeline
+from .output_pipeline import install_silencer, install_summarizer
+from .plan_mode import install_plan_mode_entry
 from .workspaces.runtime import schedule_gc
 
 if TYPE_CHECKING:
@@ -39,14 +43,20 @@ logger = structlog.get_logger()
 def install(application: Application) -> None:
     """Install ccgram-pro into the running PTB application.
 
-    Phase 0/0.5 setup:
+    Currently wires:
 
-    - Ensure layer directories exist (``state``, ``snapshots``,
-      ``pr-loop``, ``workspaces``).
-    - Schedule the periodic workspace GC sweep on the PTB JobQueue.
-
-    Phase 1+ will add handler registrations and message intercepts here.
+    - Layer directories exist (``state``, ``snapshots``, ``pr-loop``,
+      ``workspaces``).
+    - Periodic workspace GC sweep on the PTB JobQueue.
+    - Output silencer that quiets ccgram's per-tick topic-emoji
+      renames, status-bubble edits, and typing pings for windows whose
+      sidecar has ``silent_mode = True`` (the default).
     """
     ensure_layer_dirs()
     schedule_gc(application)
+    install_silencer()
+    install_summarizer()
+    install_input_pipeline(application)
+    install_plan_mode_entry()
+    install_layer_commands(application)
     logger.info("ccgram-pro %s installed", __version__)

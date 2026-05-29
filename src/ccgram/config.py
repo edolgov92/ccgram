@@ -141,6 +141,28 @@ class Config:
         self.provider_name: str = _env_with_fallback(
             "CCGRAM_PROVIDER", "CCBOT_PROVIDER", "claude"
         )
+        # When set to a valid provider name, the directory-browser flow
+        # skips the "Select Provider" keyboard and uses this value directly.
+        # The approval-mode picker (Standard / YOLO) still runs for providers
+        # that support a YOLO mode (Claude / Codex / Gemini / Pi). Useful for
+        # operators who always work with the same agent CLI and find the
+        # extra tap-and-aim picker step a friction point.
+        self.forced_provider: str = _env_with_fallback(
+            "CCGRAM_FORCED_PROVIDER", "CCBOT_FORCED_PROVIDER"
+        ).lower()
+        # When BOTH ``CCGRAM_FORCED_PROVIDER`` and this are set, the mode
+        # picker is also skipped — directory pick goes straight to window
+        # creation with this approval mode. Accepted values: ``"normal"``
+        # (Standard) and ``"yolo"`` (YOLO). ``""`` keeps the picker visible.
+        # Note that ``"yolo"`` is silently downgraded to ``"normal"`` when
+        # the bot runs as root, because Claude Code refuses
+        # ``--dangerously-skip-permissions`` for root processes.
+        forced_mode = _env_with_fallback(
+            "CCGRAM_FORCED_APPROVAL_MODE", "CCBOT_FORCED_APPROVAL_MODE"
+        ).lower()
+        if forced_mode in ("standard", "default"):
+            forced_mode = "normal"  # friendlier aliases for the env var
+        self.forced_approval_mode: str = forced_mode
 
         # Directory browser: show hidden (dot) directories
         self.show_hidden_dirs: bool = _env_with_fallback(

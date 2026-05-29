@@ -109,7 +109,9 @@ class TestHandleUnboundTopic:
 
         assert result is True
         mock_picker.assert_called_once()
-        assert mock_reply.call_count == 2
+        # Only the picker keyboard reply is sent — the legacy
+        # PENDING_DELIVERY_NOTICE has been dropped (redundant noise).
+        assert mock_reply.call_count == 1
         assert user_data[STATE_KEY] == STATE_SELECTING_WINDOW
         assert user_data[PENDING_THREAD_TEXT] == "hello"
 
@@ -138,7 +140,9 @@ class TestHandleUnboundTopic:
         assert result is True
         mock_browser.assert_called_once()
         assert user_data[STATE_KEY] == STATE_BROWSING_DIRECTORY
-        assert mock_reply.call_count == 2
+        # Only the directory-browser keyboard reply is sent — the legacy
+        # PENDING_DELIVERY_NOTICE has been dropped (redundant noise).
+        assert mock_reply.call_count == 1
 
     @patch(f"{_TH}.safe_reply", new_callable=AsyncMock)
     @patch(f"{_TH}.build_window_picker")
@@ -170,13 +174,14 @@ class TestHandleUnboundTopic:
     @patch(f"{_TH}.build_window_picker")
     @patch(f"{_TH}.tmux_manager")
     @patch(f"{_TH}.thread_router")
-    async def test_window_picker_sends_pending_disclosure(
+    async def test_window_picker_does_not_send_pending_notice(
         self,
         mock_tr: MagicMock,
         mock_tm: MagicMock,
         mock_picker: MagicMock,
         mock_reply: AsyncMock,
     ) -> None:
+        """The redundant 'Will deliver once the agent starts.' notice is gone."""
         mock_tr.get_window_for_thread.return_value = None
         mock_tr.iter_thread_bindings.return_value = []
         w = MagicMock(window_id="@5", window_name="proj", cwd="/tmp")
@@ -191,20 +196,22 @@ class TestHandleUnboundTopic:
 
         from ccgram.handlers.text.text_handler import PENDING_DELIVERY_NOTICE
 
-        assert mock_reply.call_count == 2
-        assert mock_reply.call_args_list[1].args[1] == PENDING_DELIVERY_NOTICE
+        assert mock_reply.call_count == 1
+        for call in mock_reply.call_args_list:
+            assert call.args[1] != PENDING_DELIVERY_NOTICE
 
     @patch(f"{_TH}.safe_reply", new_callable=AsyncMock)
     @patch(f"{_TH}.build_directory_browser")
     @patch(f"{_TH}.tmux_manager")
     @patch(f"{_TH}.thread_router")
-    async def test_directory_browser_sends_pending_disclosure(
+    async def test_directory_browser_does_not_send_pending_notice(
         self,
         mock_tr: MagicMock,
         mock_tm: MagicMock,
         mock_browser: MagicMock,
         mock_reply: AsyncMock,
     ) -> None:
+        """The redundant 'Will deliver once the agent starts.' notice is gone."""
         mock_tr.get_window_for_thread.return_value = None
         mock_tr.iter_thread_bindings.return_value = []
         mock_tm.list_windows = AsyncMock(return_value=[])
@@ -218,8 +225,9 @@ class TestHandleUnboundTopic:
 
         from ccgram.handlers.text.text_handler import PENDING_DELIVERY_NOTICE
 
-        assert mock_reply.call_count == 2
-        assert mock_reply.call_args_list[1].args[1] == PENDING_DELIVERY_NOTICE
+        assert mock_reply.call_count == 1
+        for call in mock_reply.call_args_list:
+            assert call.args[1] != PENDING_DELIVERY_NOTICE
 
 
 class TestHandleDeadWindow:
