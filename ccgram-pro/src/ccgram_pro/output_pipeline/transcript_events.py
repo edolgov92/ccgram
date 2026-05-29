@@ -56,13 +56,26 @@ def _stringify_tool_result(content: object) -> tuple[str, bool]:
     return str(content), False
 
 
-def extract_events(transcript_path: str, *, max_lines: int = 400) -> list[TurnEvent]:
+# Read a generous window of recent transcript lines (a long agentic turn
+# can produce hundreds of entries), but cap the stored event count so the
+# share JSON stays bounded. The view paginates within these events, showing
+# the newest page first and loading older ones on scroll.
+_MAX_TRANSCRIPT_LINES = 4000
+_MAX_STORED_EVENTS = 600
+
+
+def extract_events(
+    transcript_path: str, *, max_lines: int = _MAX_TRANSCRIPT_LINES
+) -> list[TurnEvent]:
     """Return structured events for the recent transcript window.
 
-    Reads the last *max_lines* JSONL entries — enough for a multi-message
-    turn while bounding work on a huge transcript. Order is preserved
-    (chronological). ``tool_result`` blocks carry their ``tool_use_id``
-    so the renderer can collapse them under the matching call.
+    Reads the last *max_lines* JSONL entries — enough for a long
+    multi-message turn while bounding work on a huge transcript. Order is
+    preserved (chronological). The result is capped to the newest
+    ``_MAX_STORED_EVENTS`` so the share record stays a sane size; the view
+    paginates within whatever is stored. ``tool_result`` blocks carry
+    their ``tool_use_id`` so the renderer can collapse them under the
+    matching call.
     """
     try:
         raw = Path(transcript_path).read_text(encoding="utf-8", errors="replace")
@@ -123,7 +136,9 @@ def extract_events(transcript_path: str, *, max_lines: int = 400) -> list[TurnEv
                         is_error=bool(block.get("is_error", False)),
                     )
                 )
-    return events
+    # Cap to the newest N so the share JSON stays bounded; the view
+    # paginates within whatever is stored.
+    return events[-_MAX_STORED_EVENTS:]
 
 
 def _role_kind(role: str) -> str:
