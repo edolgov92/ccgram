@@ -202,56 +202,80 @@ def render_events_html(events: list[TurnEvent]) -> str:
 
 
 def transcript_css() -> str:
-    """CSS for the transcript layout. Concatenated into the page <style>."""
+    """CSS for the transcript layout. Concatenated into the page <style>.
+
+    Modern dark UI: gradient avatars, soft elevated bubbles with depth,
+    refined type, and styled native-<details> disclosure chevrons. Uses
+    the :root tokens defined in the page shell (--surface, --accent, …).
+    """
     return """
-  .transcript { display: flex; flex-direction: column; gap: 14px; }
-  .row { display: flex; gap: 10px; align-items: flex-start; }
+  .transcript { display: flex; flex-direction: column; gap: 16px; }
+  .row { display: flex; gap: 11px; align-items: flex-start; }
   .row.user { flex-direction: row; justify-content: flex-end; }
-  .gutter { flex: 0 0 32px; display: flex; justify-content: center; padding-top: 2px; }
-  .avatar { width: 30px; height: 30px; border-radius: 50%; display: flex;
-            align-items: center; justify-content: center; font-size: 15px;
-            border: 1px solid var(--border); }
-  .claude-avatar { background: #1f6feb22; color: #58a6ff; }
-  .user-avatar { background: #23863622; }
-  .tool-avatar { background: #9e6a0322; }
-  .bubble { border-radius: 12px; padding: 10px 14px; max-width: 82%;
-            border: 1px solid var(--border); background: var(--code-bg); }
-  .role-label { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em;
-                color: var(--muted); margin-bottom: 4px; font-weight: 600; }
-  .user-bubble { background: #1f6feb1a; border-color: #1f6feb55; }
-  .assistant-bubble { background: #161b22; }
-  .content p { margin: 0 0 0.6em; }
+
+  .avatar { flex: 0 0 32px; width: 32px; height: 32px; border-radius: 11px;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 15px; box-shadow: var(--shadow); }
+  .claude-avatar { background: linear-gradient(140deg, #6d8bff, #b69cff);
+                   color: #0b0d12; font-weight: 700; }
+  .user-avatar { background: linear-gradient(140deg, #2b3242, #363d4e); }
+  .tool-avatar { background: linear-gradient(140deg, #3a2f12, #4a3a14); }
+  .gutter { flex: 0 0 32px; }
+
+  .bubble { border-radius: var(--radius); padding: 11px 15px; max-width: 80%;
+            border: 1px solid var(--border-soft); background: var(--surface);
+            box-shadow: var(--shadow); }
+  .role-label { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.06em;
+                color: var(--faint); margin-bottom: 5px; font-weight: 600; }
+  .user-bubble { background: linear-gradient(160deg, #1d2740, #151a26);
+                 border-color: #2c3a63; border-bottom-right-radius: 6px; }
+  .assistant-bubble { border-bottom-left-radius: 6px; }
+  .content p { margin: 0 0 0.62em; }
   .content p:last-child { margin-bottom: 0; }
-  .content pre { background: #0d1117; border: 1px solid var(--border);
-                 border-radius: 8px; padding: 10px 12px; overflow-x: auto; margin: 0.5em 0; }
-  .content code { background: #0d1117; padding: 1px 5px; border-radius: 4px;
-                  font-family: "SF Mono", ui-monospace, Menlo, monospace; font-size: 0.9em; }
+  .content strong { color: #fff; font-weight: 640; }
+  .content pre { background: #0b0e14; border: 1px solid var(--border-soft);
+                 border-radius: 10px; padding: 11px 13px; overflow-x: auto;
+                 margin: 0.55em 0; }
+  .content code { background: var(--elevated); padding: 1.5px 6px; border-radius: 6px;
+                  font-family: var(--mono); font-size: 0.88em; }
   .content pre code { background: none; padding: 0; }
 
-  /* Tool call card */
-  .tool-bubble { background: #1c1810; border-color: #9e6a0355; max-width: 90%; }
-  .tool-head { font-size: 0.95rem; margin-bottom: 6px; }
-  .tool-headline { font-family: "SF Mono", ui-monospace, Menlo, monospace;
-                   font-size: 0.86rem; background: #0d1117; border: 1px solid var(--border);
-                   border-radius: 6px; padding: 8px 10px; overflow-x: auto;
-                   white-space: pre-wrap; word-break: break-all; }
-  .tool-args { margin-top: 6px; }
-  .tool-args summary, .tool-result summary, .thinking summary, .more summary {
-      cursor: pointer; color: var(--muted); font-size: 0.8rem; user-select: none; }
-  .tool-args pre, .tool-result pre, .more pre { font-size: 0.82rem; margin: 6px 0 0;
-      background: #0d1117; border: 1px solid var(--border); border-radius: 6px;
-      padding: 8px 10px; overflow-x: auto; white-space: pre-wrap; word-break: break-word; }
+  /* Tool call card — amber accent */
+  .tool-bubble { background: linear-gradient(160deg, #1c1709, #161208);
+                 border-color: #4a3a14; border-left: 3px solid #d8a23a;
+                 max-width: 92%; }
+  .tool-head { font-size: 0.92rem; font-weight: 600; margin-bottom: 7px;
+               color: #f0c674; }
+  .tool-headline { font-family: var(--mono); font-size: 0.84rem; background: #0b0e14;
+                   border: 1px solid var(--border-soft); border-radius: 8px;
+                   padding: 9px 11px; overflow-x: auto; white-space: pre-wrap;
+                   word-break: break-word; color: #e6d9b8; }
+  .tool-args { margin-top: 7px; }
+  details > summary {
+      cursor: pointer; color: var(--muted); font-size: 0.78rem; font-weight: 550;
+      user-select: none; list-style: none; display: inline-flex; align-items: center;
+      gap: 5px; padding: 1px 0; }
+  details > summary::-webkit-details-marker { display: none; }
+  details > summary::before { content: '▸'; color: var(--faint); font-size: 0.7rem;
+      transition: transform .15s ease; display: inline-block; }
+  details[open] > summary::before { transform: rotate(90deg); }
+  .tool-args pre, .tool-result pre, .more pre { font-size: 0.81rem; margin: 7px 0 0;
+      background: #0b0e14; border: 1px solid var(--border-soft); border-radius: 8px;
+      padding: 9px 11px; overflow-x: auto; white-space: pre-wrap; word-break: break-word; }
 
-  /* Tool result */
-  .tool-result { background: #0f1a12; border-color: #2ea04355; max-width: 90%; }
-  .tool-result.error { background: #1a1011; border-color: #f8514955; }
-  .tool-result[open] summary { margin-bottom: 6px; }
+  /* Tool result — emerald (success) / rose (error) */
+  .tool-result { background: linear-gradient(160deg, #0c1810, #0a130c);
+                 border-color: #1c3a28; border-left: 3px solid #2ea043; max-width: 92%; }
+  .tool-result.error { background: linear-gradient(160deg, #1a0e10, #140a0b);
+                       border-color: #3a1c1f; border-left-color: #f85149; }
+  .tool-result[open] > summary { margin-bottom: 7px; }
 
-  /* Thinking */
-  .thinking { background: #14141c; border-color: #6e768166; max-width: 90%; opacity: 0.85; }
-  .thinking .content { margin-top: 6px; font-size: 0.9rem; }
+  /* Thinking — muted violet, recessed */
+  .thinking { background: #13131d; border-color: #2a2740; border-left: 3px solid #6e6a9e;
+              max-width: 92%; }
+  .thinking .content { margin-top: 7px; font-size: 0.9rem; color: var(--muted); }
 
-  .empty { color: var(--muted); }
+  .empty { color: var(--muted); text-align: center; padding: 24px; }
   @media (max-width: 600px) {
     .bubble, .tool-bubble, .tool-result, .thinking { max-width: 100%; }
   }
