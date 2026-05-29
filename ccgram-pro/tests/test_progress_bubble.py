@@ -47,24 +47,16 @@ async def test_start_bubble_posts_message_and_registers() -> None:
 
 async def test_start_bubble_is_idempotent_per_window() -> None:
     bot = _make_bot()
-    await progress_bubble.start_bubble(
-        window_id="@1", bot=bot, chat_id=1, thread_id=1
-    )
-    await progress_bubble.start_bubble(
-        window_id="@1", bot=bot, chat_id=1, thread_id=1
-    )
+    await progress_bubble.start_bubble(window_id="@1", bot=bot, chat_id=1, thread_id=1)
+    await progress_bubble.start_bubble(window_id="@1", bot=bot, chat_id=1, thread_id=1)
     # Second start was a no-op — only one send_message call total.
     assert bot.send_message.await_count == 1
 
 
 async def test_start_bubble_isolates_different_windows() -> None:
     bot = _make_bot()
-    await progress_bubble.start_bubble(
-        window_id="@a", bot=bot, chat_id=1, thread_id=1
-    )
-    await progress_bubble.start_bubble(
-        window_id="@b", bot=bot, chat_id=2, thread_id=2
-    )
+    await progress_bubble.start_bubble(window_id="@a", bot=bot, chat_id=1, thread_id=1)
+    await progress_bubble.start_bubble(window_id="@b", bot=bot, chat_id=2, thread_id=2)
     assert progress_bubble.is_active("@a")
     assert progress_bubble.is_active("@b")
     assert bot.send_message.await_count == 2
@@ -72,9 +64,7 @@ async def test_start_bubble_isolates_different_windows() -> None:
 
 async def test_stop_bubble_cancels_task_and_deletes_message() -> None:
     bot = _make_bot()
-    await progress_bubble.start_bubble(
-        window_id="@1", bot=bot, chat_id=1, thread_id=1
-    )
+    await progress_bubble.start_bubble(window_id="@1", bot=bot, chat_id=1, thread_id=1)
     assert progress_bubble.is_active("@1")
     await progress_bubble.stop_bubble("@1", bot)
     assert not progress_bubble.is_active("@1")
@@ -92,9 +82,7 @@ async def test_start_swallows_send_failure() -> None:
     bot = _make_bot()
     bot.send_message.side_effect = RuntimeError("network down")
     # Must not raise — the bubble is best-effort UI.
-    await progress_bubble.start_bubble(
-        window_id="@1", bot=bot, chat_id=1, thread_id=1
-    )
+    await progress_bubble.start_bubble(window_id="@1", bot=bot, chat_id=1, thread_id=1)
     assert not progress_bubble.is_active("@1")
 
 
@@ -102,9 +90,7 @@ async def test_tick_loop_edits_periodically(monkeypatch) -> None:
     """Patch the tick interval down so the test runs in milliseconds."""
     monkeypatch.setattr(progress_bubble, "_TICK_INTERVAL_SECONDS", 0.05)
     bot = _make_bot()
-    await progress_bubble.start_bubble(
-        window_id="@1", bot=bot, chat_id=1, thread_id=1
-    )
+    await progress_bubble.start_bubble(window_id="@1", bot=bot, chat_id=1, thread_id=1)
     await asyncio.sleep(0.15)  # at least 2 ticks should fire
     assert bot.edit_message_text.await_count >= 2
     await progress_bubble.stop_bubble("@1", bot)

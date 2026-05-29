@@ -94,8 +94,12 @@ def parse_unified_diff(raw: str) -> list[DiffFile]:
             parts = line.split()
             if len(parts) >= 4:
                 # diff --git a/<path> b/<path>
-                current_file["old_path"] = parts[2][2:] if parts[2].startswith("a/") else parts[2]
-                current_file["path"] = parts[3][2:] if parts[3].startswith("b/") else parts[3]
+                current_file["old_path"] = (
+                    parts[2][2:] if parts[2].startswith("a/") else parts[2]
+                )
+                current_file["path"] = (
+                    parts[3][2:] if parts[3].startswith("b/") else parts[3]
+                )
             continue
         if current_file is None:
             continue

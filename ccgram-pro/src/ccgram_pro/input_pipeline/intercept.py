@@ -50,9 +50,7 @@ def _is_batched(window_id: str) -> bool:
 
 
 def _status_text(count: int) -> str:
-    return (
-        f"📝 {count} message{'s' if count != 1 else ''} batched — tap **Send** to forward."
-    )
+    return f"📝 {count} message{'s' if count != 1 else ''} batched — tap **Send** to forward."
 
 
 def _status_keyboard(window_id: str) -> Any:
@@ -88,7 +86,10 @@ async def _edit_or_send_status(
     Lives on this layer's :data:`_status_messages` dict — independent of
     ccgram's status bubble (which is silenced) so we never collide.
     """
+    # Lazy: PTB types only needed on the handler/send path.
     from telegram.constants import ParseMode
+
+    # Lazy: PTB types only needed on the handler/send path.
     from telegram.error import TelegramError
 
     key = (user_id, thread_id)
@@ -156,13 +157,14 @@ async def _wrapped_forward_message(
         # Lazy: progress_bubble is part of the output pipeline; deferring
         # the import keeps the input package free of an extra cross-edge.
         from ..config import load_settings
+
+        # Lazy: deferred to avoid a heavy/cyclic import at module load.
         from ..output_pipeline import progress_bubble
+
+        # Lazy: deferred to avoid a heavy/cyclic import at module load.
         from .silencer_guard import is_silent_for_window
 
-        if (
-            load_settings().defaults.progress_bubble
-            and is_silent_for_window(window_id)
-        ):
+        if load_settings().defaults.progress_bubble and is_silent_for_window(window_id):
             bot = message.get_bot() if hasattr(message, "get_bot") else None
             if bot is not None:
                 await progress_bubble.start_bubble(
@@ -206,7 +208,10 @@ async def _wrapped_voice_send(
     Resolves the bound window and, when batch_mode is on, appends the
     transcribed text to the batch (no immediate ``send_to_window``).
     """
+    # Lazy: ccgram internal — deferred to avoid an import cycle with ccgram bootstrap (the layer is imported during bootstrap).
     from ccgram.handlers.callback_helpers import get_thread_id
+
+    # Lazy: ccgram internal — deferred to avoid an import cycle with ccgram bootstrap (the layer is imported during bootstrap).
     from ccgram.thread_router import thread_router
 
     thread_id = get_thread_id(update)
@@ -259,6 +264,8 @@ def install_input_pipeline(application: "Application") -> None:
 
     # Lazy: text_handler / voice_callbacks pull in a lot of PTB plumbing.
     from ccgram.handlers.text import text_handler as text_handler_mod
+
+    # Lazy: ccgram internal — deferred to avoid an import cycle with ccgram bootstrap (the layer is imported during bootstrap).
     from ccgram.handlers.voice import voice_callbacks as voice_callbacks_mod
 
     _ORIGINAL_FORWARD_MESSAGE = text_handler_mod._forward_message
@@ -268,8 +275,10 @@ def install_input_pipeline(application: "Application") -> None:
     voice_callbacks_mod._handle_send = _wrapped_voice_send  # type: ignore[assignment]
 
     # Register the Send / Clear callback handler.
+    # Lazy: PTB types only needed on the handler/send path.
     from telegram.ext import CallbackQueryHandler
 
+    # Lazy: deferred to avoid a heavy/cyclic import at module load.
     from .callbacks import handle_batch_callback
 
     application.add_handler(

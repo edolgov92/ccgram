@@ -8,12 +8,12 @@ typed helper so callers don't have to remember the flag soup.
 
 from .branch import (
     BranchInfo,
-    GitOpError,
     create_branch,
     current_branch,
     list_branches,
     push_branch,
 )
+from ._run import GitOpError
 from .diff import (
     DiffFile,
     DiffHunk,

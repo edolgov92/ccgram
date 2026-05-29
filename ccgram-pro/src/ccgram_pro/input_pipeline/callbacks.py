@@ -57,7 +57,7 @@ async def _do_flush(
     query: Any, user_id: int, thread_id: int, window_id: str, context: Any
 ) -> None:
     """Run the batcher flush, forward the combined text, edit status to ✅."""
-    from ccgram.handlers.text.text_handler import _forward_message
+    # Lazy: ccgram internal — deferred to avoid an import cycle with ccgram bootstrap (the layer is imported during bootstrap).
     from ccgram.telegram_client import PTBTelegramClient
 
     result = await flush(window_id)
@@ -98,7 +98,10 @@ async def _do_flush(
 
     # Optionally kick off the live "🔧 Working…" bubble. Off by default —
     # the ack reaction is the heartbeat; the bubble reads as spam.
+    # Lazy: deferred to avoid a heavy/cyclic import at module load.
     from ..config import load_settings
+
+    # Lazy: deferred to avoid a heavy/cyclic import at module load.
     from ..output_pipeline import progress_bubble
 
     chat_id = query.message.chat.id if query.message else None
@@ -133,6 +136,7 @@ async def _do_clear(query: Any, user_id: int, thread_id: int) -> None:
 
 async def _finalise(query: Any, user_id: int, thread_id: int, text: str) -> None:
     """Edit the status reply to *text* and forget our tracked message id."""
+    # Lazy: PTB types only needed on the handler/send path.
     from telegram.error import TelegramError
 
     msg_id = intercept.clear_status_message(user_id, thread_id)

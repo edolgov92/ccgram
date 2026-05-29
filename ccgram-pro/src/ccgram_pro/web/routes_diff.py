@@ -84,9 +84,7 @@ def _build_toggle(*, token: str, current: str, available: list[str]) -> str:
     for anchor in _VALID_ANCHORS:
         if anchor not in available:
             continue
-        label = (
-            "Last iteration" if anchor == "iteration" else "Since session start"
-        )
+        label = "Last iteration" if anchor == "iteration" else "Since session start"
         cls = "active" if anchor == current else ""
         items.append(
             f'<a href="/diff/{html.escape(token)}?anchor={anchor}" class="{cls}">{label}</a>'
@@ -95,6 +93,7 @@ def _build_toggle(*, token: str, current: str, available: list[str]) -> str:
 
 
 async def _handle_diff(request: "web.Request") -> "web.Response":
+    # Lazy: aiohttp only needed inside the request handler.
     from aiohttp import web
 
     token = request.match_info.get("token", "")
@@ -133,8 +132,11 @@ async def _handle_diff(request: "web.Request") -> "web.Response":
     files = parse_unified_diff(snapshot.diff_text)
     diff_html = render_diff_html(
         files,
-        empty_message=("No changes since session start." if anchor == "session"
-                       else "No changes in Claude's last iteration."),
+        empty_message=(
+            "No changes since session start."
+            if anchor == "session"
+            else "No changes in Claude's last iteration."
+        ),
     )
 
     meta_line = (

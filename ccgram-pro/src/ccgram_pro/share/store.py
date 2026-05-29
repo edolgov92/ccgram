@@ -133,7 +133,7 @@ def prune_expired(*, max_age_seconds: int = 7 * 86400) -> int:
         try:
             meta = json.loads(meta_path.read_text(encoding="utf-8"))
             created_at = float(meta.get("created_at", 0.0))
-        except (OSError, json.JSONDecodeError, ValueError):
+        except OSError, json.JSONDecodeError, ValueError:
             # Corrupt or unreadable — fall back to mtime so we still
             # garbage-collect it eventually.
             try:
@@ -141,7 +141,8 @@ def prune_expired(*, max_age_seconds: int = 7 * 86400) -> int:
             except OSError:
                 continue
         if created_at < cutoff:
-            import shutil  # Lazy: rmtree is only needed in the prune path.
+            # Lazy: shutil only needed on the prune path.
+            import shutil
 
             shutil.rmtree(entry, ignore_errors=True)
             removed += 1

@@ -47,7 +47,9 @@ def _b64url_decode(token: str) -> bytes:
 def _signing_key(bot_token: str) -> bytes:
     if not bot_token:
         raise InvalidShareToken("bot_token is empty")
-    return hmac.new(_TOKEN_NAMESPACE, bot_token.encode("utf-8"), hashlib.sha256).digest()
+    return hmac.new(
+        _TOKEN_NAMESPACE, bot_token.encode("utf-8"), hashlib.sha256
+    ).digest()
 
 
 def sign_share_token(
