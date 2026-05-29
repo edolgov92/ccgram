@@ -36,28 +36,54 @@ _PAGE_TEMPLATE = """\
 <title>Diff · {window_id}</title>
 <style>
   :root {{
-    color-scheme: dark light;
-    --bg: #0d1117;
-    --fg: #e6edf3;
-    --muted: #8b949e;
-    --accent: #58a6ff;
-    --code-bg: #161b22;
-    --border: #30363d;
+    color-scheme: dark;
+    --bg: #0a0c10;
+    --bg-grad: radial-gradient(1200px 600px at 50% -10%, #141926 0%, #0a0c10 60%);
+    --surface: #12151d;
+    --elevated: #171b25;
+    --fg: #eceef4;
+    --muted: #99a1b3;
+    --faint: #6b7280;
+    --accent: #8aa6ff;
+    --border: #232936;
+    --border-soft: #1b212c;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.22);
+    --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+            "Helvetica Neue", Arial, "Inter", sans-serif;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code",
+            Menlo, Consolas, monospace;
   }}
   * {{ box-sizing: border-box; }}
-  html, body {{ margin: 0; padding: 0; background: var(--bg); color: var(--fg);
-              font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }}
-  main {{ max-width: 960px; margin: 0 auto; padding: 18px; }}
-  header.page {{ border-bottom: 1px solid var(--border); padding-bottom: 12px; margin-bottom: 16px; }}
-  h1 {{ font-size: 1.2rem; margin: 0 0 6px; word-break: break-all; }}
-  .meta {{ color: var(--muted); font-size: 0.85rem; }}
-  .toggle {{ display: inline-flex; gap: 0; margin: 10px 0; border: 1px solid var(--border);
-            border-radius: 8px; overflow: hidden; }}
-  .toggle a {{ padding: 6px 14px; text-decoration: none; color: var(--fg);
-              background: var(--code-bg); font-size: 0.85rem; }}
-  .toggle a.active {{ background: var(--accent); color: var(--bg); font-weight: 600; }}
-  footer {{ margin-top: 40px; padding-top: 16px; border-top: 1px solid var(--border);
-            color: var(--muted); font-size: 0.78rem; }}
+  html {{ -webkit-text-size-adjust: 100%; }}
+  body {{ margin: 0; background: var(--bg); background-image: var(--bg-grad);
+          background-attachment: fixed; color: var(--fg); font-family: var(--font);
+          font-size: 15.5px; line-height: 1.6; -webkit-font-smoothing: antialiased; }}
+  main {{ max-width: 980px; margin: 0 auto; padding: 0 16px 96px; }}
+  header.page {{ position: sticky; top: 0; z-index: 10; margin: 0 -16px 18px;
+            padding: 16px 16px 14px; background: rgba(10,12,16,.72);
+            backdrop-filter: saturate(140%) blur(14px);
+            -webkit-backdrop-filter: saturate(140%) blur(14px);
+            border-bottom: 1px solid var(--border-soft); }}
+  h1 {{ font-size: 1.14rem; font-weight: 650; letter-spacing: -0.01em; margin: 0 0 8px;
+        word-break: break-all;
+        background: linear-gradient(92deg, var(--fg), #c7cede);
+        -webkit-background-clip: text; background-clip: text;
+        -webkit-text-fill-color: transparent; }}
+  .meta {{ display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }}
+  .meta .chip {{ font-size: 0.72rem; color: var(--muted); background: var(--surface);
+                 border: 1px solid var(--border-soft); border-radius: 999px;
+                 padding: 3px 10px; white-space: nowrap; }}
+  .meta .chip code {{ color: var(--accent); font-family: var(--mono); font-size: 0.92em; }}
+  .toggle {{ display: inline-flex; gap: 4px; padding: 4px; background: var(--surface);
+            border: 1px solid var(--border-soft); border-radius: 12px; }}
+  .toggle a {{ padding: 7px 16px; text-decoration: none; color: var(--muted);
+              border-radius: 9px; font-size: 0.82rem; font-weight: 550;
+              transition: background .12s ease, color .12s ease; }}
+  .toggle a:hover {{ color: var(--fg); }}
+  .toggle a.active {{ background: linear-gradient(140deg, #6d8bff, #b69cff);
+                      color: #0b0d12; font-weight: 650; box-shadow: var(--shadow); }}
+  footer {{ margin-top: 44px; padding-top: 18px; border-top: 1px solid var(--border-soft);
+            color: var(--faint); font-size: 0.76rem; text-align: center; }}
 {diff_css}
 </style>
 </head>
@@ -140,9 +166,9 @@ async def _handle_diff(request: "web.Request") -> "web.Response":
     )
 
     meta_line = (
-        f"Branch: <code>{html.escape(snapshot.branch)}</code> · "
-        f"Anchor sha: <code>{html.escape(snapshot.head_sha[:12])}</code> · "
-        f"Project: <code>{html.escape(snapshot.project_root)}</code>"
+        f'<span class="chip">🌿 <code>{html.escape(snapshot.branch)}</code></span>'
+        f'<span class="chip">⎇ <code>{html.escape(snapshot.head_sha[:12])}</code></span>'
+        f'<span class="chip">📂 <code>{html.escape(snapshot.project_root)}</code></span>'
     )
     title = html.escape(f"Diff · {window_id} · {anchor}")
     page = _PAGE_TEMPLATE.format(
