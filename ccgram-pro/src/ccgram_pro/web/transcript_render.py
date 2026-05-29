@@ -172,11 +172,14 @@ def _render_assistant(ev: TurnEvent) -> str:
     )
 
 
-def render_events_html(events: list[TurnEvent]) -> str:
-    """Render the full event list into the transcript body HTML."""
-    if not events:
-        return '<p class="empty">No transcript content.</p>'
-    parts: list[str] = ['<div class="transcript">']
+def render_rows_html(events: list[TurnEvent]) -> str:
+    """Render just the event rows (no ``.transcript`` container).
+
+    Used both for the initial page (inside the container) and the
+    infinite-scroll fragment endpoint (prepended into the existing
+    container client-side).
+    """
+    parts: list[str] = []
     for ev in events:
         if ev.kind == "user":
             parts.append(_render_user(ev))
@@ -188,8 +191,14 @@ def render_events_html(events: list[TurnEvent]) -> str:
             parts.append(_render_tool_use(ev))
         elif ev.kind == "tool_result":
             parts.append(_render_tool_result(ev))
-    parts.append("</div>")
     return "\n".join(parts)
+
+
+def render_events_html(events: list[TurnEvent]) -> str:
+    """Render the full event list into a ``.transcript`` container."""
+    if not events:
+        return '<p class="empty">No transcript content.</p>'
+    return f'<div class="transcript">{render_rows_html(events)}</div>'
 
 
 def transcript_css() -> str:
