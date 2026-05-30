@@ -215,8 +215,13 @@ def validate_branch_name(name: str) -> bool:
     return res.returncode == 0
 
 
-def create_worktree(repo_path: Path, branch: str, worktree_path: Path) -> None:
-    """Create a worktree at *worktree_path* on a new *branch* off HEAD.
+def create_worktree(
+    repo_path: Path, branch: str, worktree_path: Path, *, base_ref: str = "HEAD"
+) -> None:
+    """Create a worktree at *worktree_path* on a new *branch* off *base_ref*.
+
+    *base_ref* defaults to ``HEAD`` (today's behaviour); callers that let the
+    user pick a base branch pass it through so the new branch forks from there.
 
     Raises ``WorktreeError`` with git's stderr on any failure (branch
     already exists, target path occupied, git/OS error).
@@ -238,7 +243,7 @@ def create_worktree(repo_path: Path, branch: str, worktree_path: Path) -> None:
                 str(worktree_path),
                 "-b",
                 branch,
-                "HEAD",
+                base_ref,
             ],
             capture_output=True,
             text=True,

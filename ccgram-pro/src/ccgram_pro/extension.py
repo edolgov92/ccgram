@@ -28,11 +28,13 @@ import structlog
 
 from . import __version__
 from .config import ensure_layer_dirs
+from .git_composer import install_git_composer
 from .handlers import install_layer_commands
 from .input_pipeline import install_input_pipeline
 from .new_session import install_new_session
 from .output_pipeline import install_silencer, install_summarizer
-from .plan_mode import install_plan_mode_entry
+from .plan_mode import install_plan_approval_surface
+from .settings_panel import install_settings_panel
 from .workspaces.runtime import schedule_gc
 
 if TYPE_CHECKING:
@@ -58,10 +60,11 @@ def install(application: Application) -> None:
     install_silencer()
     install_summarizer()
     install_input_pipeline(application)
-    install_plan_mode_entry()
-    # After plan_mode so the new-session wrapper of _create_window_and_bind
-    # is outermost — it sets the model/effort override before plan_mode's
-    # wrapper calls the original (where resolve_launch_command reads it).
     install_new_session(application)
+    install_settings_panel(application)
+    # After the silencer (so the interactive whitelist + silent checks see the
+    # wrapped chain) — augments ccgram's native ExitPlanMode prompt.
+    install_plan_approval_surface()
+    install_git_composer(application)
     install_layer_commands(application)
     logger.info("ccgram-pro %s installed", __version__)

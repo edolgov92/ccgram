@@ -257,6 +257,35 @@ async def test_delete_workspace_returns_false_when_missing(tmp_path: Path) -> No
     assert await manager.delete_workspace("@never-existed") is False
 
 
+async def test_delete_workspace_removes_clone_path_not_window_path(
+    tmp_path: Path,
+) -> None:
+    """The new-session clone strategy stores a pending-<uuid> path that does
+    NOT match workspace_for_window — delete_workspace must honour the stored
+    sidecar path, not the window-id-derived one."""
+    from ccgram_pro.config import workspaces_dir
+
+    clone = workspaces_dir() / "pending-deadbeef"
+    clone.mkdir(parents=True)
+    (clone / "f").write_text("x", encoding="utf-8")
+    state.save(
+        state.WindowSidecar(
+            window_id="@clone1",
+            window_creation_epoch=0.0,
+            workspace_path=str(clone),
+            last_activity_at=0.0,
+        )
+    )
+    # The window-id-derived path is a different (non-existent) location.
+    assert not workspace_for_window("@clone1").exists()
+    removed = await manager.delete_workspace("@clone1")
+    assert removed is True
+    assert not clone.exists()
+    sidecar = state.load("@clone1")
+    assert sidecar is not None
+    assert sidecar.workspace_path is None
+
+
 async def test_touch_activity_updates_sidecar(tmp_path: Path) -> None:
     state.save(state.WindowSidecar(window_id="@touch", window_creation_epoch=0.0))
     before = time.time()

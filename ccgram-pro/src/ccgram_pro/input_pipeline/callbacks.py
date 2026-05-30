@@ -1,9 +1,12 @@
 """PTB callback handlers for the batch ``Send`` / ``Clear`` inline buttons.
 
 Callback data shape: ``ccgrampro:batch:{action}:{window_id}`` where
-*action* is ``flush`` or ``clear``. The action invokes :mod:`batcher`
-and then edits the status message to a stable final form so the user
-sees an unambiguous "sent" / "cleared" confirmation.
+*action* is ``flush`` or ``clear``. The action invokes :mod:`batcher` and
+then DELETES the status message so the conversation stays clean — no
+lingering "sent" / "cleared" notification. Feedback (when any) is an
+ephemeral callback toast, never a chat message. Delivery failures are the
+one exception: those keep the status message (with its buttons) and surface
+the error as an alert toast so the user can retry.
 """
 
 from __future__ import annotations
@@ -69,13 +72,14 @@ async def _dispatch_batch(update: Any, context: Any) -> None:
 async def _do_flush(
     query: Any, user_id: int, thread_id: int, window_id: str, context: Any
 ) -> None:
-    """Run the batcher flush, forward the combined text, edit status to ✅."""
+    """Flush the batch, forward the combined text, then delete the status msg."""
     # Lazy: ccgram internal — deferred to avoid an import cycle with ccgram bootstrap (the layer is imported during bootstrap).
     from ccgram.telegram_client import PTBTelegramClient
 
     result = await flush(window_id)
     if result is None:
-        await query.answer("Nothing to send")
+        # Empty batch (e.g. double-tap) — just remove the status message.
+        await _delete_status(query, user_id, thread_id)
         return
 
     # Call the ORIGINAL forward (captured in intercept) so we don't loop
@@ -100,14 +104,10 @@ async def _do_flush(
         await query.answer("Send failed — see logs", show_alert=True)
         return
 
-    suffix = " (with preamble)" if result.preamble_included else ""
-    await _finalise(
-        query,
-        user_id,
-        thread_id,
-        f"✅ Sent {result.item_count} item{'s' if result.item_count != 1 else ''}{suffix}",
-    )
-    await query.answer("Sent")
+    # Keep the chat clean: delete the batch status message rather than leaving
+    # a "Sent N items" notification. The user's own messages keep their read
+    # reaction; Claude's reply follows.
+    await _delete_status(query, user_id, thread_id)
 
     # Optionally kick off the live "🔧 Working…" bubble. Off by default —
     # the ack reaction is the heartbeat; the bubble reads as spam.
@@ -128,34 +128,41 @@ async def _do_flush(
 
 
 async def _do_clear(query: Any, user_id: int, thread_id: int) -> None:
-    """Drop the buffered items, edit status to 🗑️ Cleared."""
+    """Drop the buffered items and delete the status message (toast feedback)."""
     parsed = _parse_callback(query.data) if query.data else None
     if parsed is None:
         await query.answer("Invalid callback", show_alert=True)
         return
     _action, window_id = parsed
     removed = await clear(window_id)
-    if removed == 0:
-        await query.answer("Nothing to clear")
-        return
-    await _finalise(
+    # Delete the status message (clean chat); feedback is an ephemeral toast.
+    await _delete_status(
         query,
         user_id,
         thread_id,
-        f"🗑️ Cleared {removed} item{'s' if removed != 1 else ''}",
+        toast=f"🗑️ Cleared {removed} item{'s' if removed != 1 else ''}"
+        if removed
+        else "Nothing to clear",
     )
-    await query.answer("Cleared")
 
 
-async def _finalise(query: Any, user_id: int, thread_id: int, text: str) -> None:
-    """Edit the status reply to *text* and forget our tracked message id."""
+async def _delete_status(
+    query: Any, user_id: int, thread_id: int, *, toast: str = ""
+) -> None:
+    """Delete the batch status message + forget it — keeps the chat clean.
+
+    Used on a successful Send (and on Clear) so no "Sent N items" notification
+    lingers in the conversation. The user's own batch messages keep their read
+    reaction, and Claude's reply follows. Any feedback is an ephemeral callback
+    toast, never a chat message.
+    """
     # Lazy: PTB types only needed on the handler/send path.
     from telegram.error import TelegramError
 
-    msg_id = intercept.clear_status_message(user_id, thread_id)
-    if msg_id is None:
-        return
-    try:
-        await query.message.edit_text(text=text, reply_markup=None)
-    except TelegramError as exc:
-        logger.debug("finalise edit failed: %s", exc)
+    # Lazy: contextlib only needed in this branch.
+    import contextlib
+
+    intercept.clear_status_message(user_id, thread_id)  # forget tracked id
+    with contextlib.suppress(TelegramError):
+        await query.message.delete()
+    await query.answer(toast)

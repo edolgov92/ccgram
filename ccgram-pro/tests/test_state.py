@@ -241,3 +241,45 @@ def test_window_creation_epoch_fallback_to_time(tmp_path: Path) -> None:
     sidecar = state.get_or_create("@time")
     after = time.time()
     assert before - 1.0 <= sidecar.window_creation_epoch <= after + 1.0
+
+
+def test_new_picker_fields_default_and_round_trip() -> None:
+    sidecar = state.WindowSidecar(window_id="@n", window_creation_epoch=0.0)
+    assert sidecar.mode == "coding"
+    assert sidecar.workspace_strategy == "current"
+    assert sidecar.base_branch is None
+    sidecar.mode = "plan"
+    sidecar.workspace_strategy = "worktree"
+    sidecar.base_branch = "main"
+    state.save(sidecar)
+    loaded = state.load("@n")
+    assert loaded is not None
+    assert loaded.mode == "plan"
+    assert loaded.workspace_strategy == "worktree"
+    assert loaded.base_branch == "main"
+
+
+def test_old_json_without_new_fields_deserializes_to_defaults() -> None:
+    import json
+
+    path = state._sidecar_path("@old")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({"window_id": "@old", "window_creation_epoch": 0.0, "model": "opus"})
+    )
+    loaded = state.load("@old")
+    assert loaded is not None
+    assert loaded.mode == "coding"
+    assert loaded.workspace_strategy == "current"
+    assert loaded.base_branch is None
+
+
+async def test_update_locked_persists_change() -> None:
+    state.save(state.WindowSidecar(window_id="@u", window_creation_epoch=0.0))
+    result = await state.update_locked("@u", mode="plan", reasoning="max")
+    assert result is not None
+    assert result.mode == "plan"
+    loaded = state.load("@u")
+    assert loaded is not None
+    assert loaded.mode == "plan"
+    assert loaded.reasoning == "max"

@@ -45,6 +45,77 @@ class WorkspaceCreated:
     install: InstallResult | None
 
 
+async def provision_workspace(
+    source: Path,
+    dest: Path,
+    *,
+    install_command: str | None = None,
+    settings: WorkspaceSettings | None = None,
+) -> WorkspaceCreated:
+    """Clone/copy *source* into *dest* and run install — no sidecar write.
+
+    Used by the new-session picker's "clone" strategy, which must provision
+    the working directory *before* the tmux window (and therefore the
+    window_id) exists. :func:`create_workspace` is the window-keyed wrapper
+    that also records the sidecar.
+
+    Failure modes mirror :func:`create_workspace`: a missing/wrong source or a
+    clone/copy failure raises :class:`WorkspaceCreationError` (the partial
+    directory is cleaned up by the strategy module); an install failure keeps
+    the workspace and is surfaced via :attr:`WorkspaceCreated.install`.
+    """
+    if not source.is_dir():
+        msg = f"Source project path does not exist or is not a directory: {source}"
+        raise WorkspaceCreationError(msg)
+    if dest.exists():
+        msg = f"Workspace destination already exists: {dest}"
+        raise WorkspaceCreationError(msg)
+
+    ws_settings = settings or load_settings().workspaces
+    strategy = ws_settings.strategy
+    if strategy == "clone" and not is_git_repo(source):
+        logger.debug(
+            "Source %s is not a git repo; using copy strategy instead of clone",
+            source,
+        )
+        strategy = "copy"
+
+    try:
+        if strategy == "clone":
+            await clone_workspace(
+                source,
+                dest,
+                transfer_uncommitted=ws_settings.transfer_uncommitted,
+            )
+        else:
+            await copy_workspace(source, dest)
+    except (GitCloneError, CopyError) as exc:
+        raise WorkspaceCreationError(str(exc)) from exc
+
+    install_result: InstallResult | None = None
+    command = resolve_install_command(dest, configured=install_command)
+    if command is not None:
+        try:
+            install_result = await run_install(
+                dest,
+                command,
+                timeout_seconds=ws_settings.install_timeout_seconds,
+            )
+        except (ValueError, OSError) as exc:
+            logger.warning("Install run failed to start for %s: %s", dest, exc)
+
+    if install_result is not None and not install_result.succeeded:
+        logger.warning(
+            "Install for %s exited %d in %.1fs; see %s",
+            dest,
+            install_result.returncode,
+            install_result.duration_seconds,
+            install_result.log_path,
+        )
+    logger.info("Provisioned workspace at %s (strategy=%s)", dest, strategy)
+    return WorkspaceCreated(path=dest, install=install_result)
+
+
 async def create_workspace(
     window_id: str,
     source: Path,
@@ -69,50 +140,14 @@ async def create_workspace(
       and surfaced via :attr:`WorkspaceCreated.install`. The caller
       decides what to do (Phase 1 surfaces it to Telegram).
     """
-    if not source.is_dir():
-        msg = f"Source project path does not exist or is not a directory: {source}"
-        raise WorkspaceCreationError(msg)
-
     workspace = workspace_for_window(window_id)
     if workspace.exists():
         msg = f"Workspace already exists for window {window_id}: {workspace}"
         raise WorkspaceCreationError(msg)
 
-    ws_settings = settings or load_settings().workspaces
-    strategy = ws_settings.strategy
-    # Auto-downgrade: clone strategy on a non-git source falls back to copy
-    # rather than failing. Most user projects are git but ad-hoc directories
-    # should still work.
-    if strategy == "clone" and not is_git_repo(source):
-        logger.debug(
-            "Source %s is not a git repo; using copy strategy instead of clone",
-            source,
-        )
-        strategy = "copy"
-
-    try:
-        if strategy == "clone":
-            await clone_workspace(
-                source,
-                workspace,
-                transfer_uncommitted=ws_settings.transfer_uncommitted,
-            )
-        else:
-            await copy_workspace(source, workspace)
-    except (GitCloneError, CopyError) as exc:
-        raise WorkspaceCreationError(str(exc)) from exc
-
-    install_result: InstallResult | None = None
-    command = resolve_install_command(workspace, configured=install_command)
-    if command is not None:
-        try:
-            install_result = await run_install(
-                workspace,
-                command,
-                timeout_seconds=ws_settings.install_timeout_seconds,
-            )
-        except (ValueError, OSError) as exc:
-            logger.warning("Install run failed to start for %s: %s", workspace, exc)
+    created = await provision_workspace(
+        source, workspace, install_command=install_command, settings=settings
+    )
 
     now = time.time()
     async with state.transaction(window_id):
@@ -125,22 +160,8 @@ async def create_workspace(
             sidecar.project_path = str(source)
         state.save(sidecar)
 
-    if install_result is not None and not install_result.succeeded:
-        logger.warning(
-            "Install for %s exited %d in %.1fs; see %s",
-            workspace,
-            install_result.returncode,
-            install_result.duration_seconds,
-            install_result.log_path,
-        )
-
-    logger.info(
-        "Provisioned workspace for window %s at %s (strategy=%s)",
-        window_id,
-        workspace,
-        strategy,
-    )
-    return WorkspaceCreated(path=workspace, install=install_result)
+    logger.info("Provisioned workspace for window %s at %s", window_id, workspace)
+    return WorkspaceCreated(path=workspace, install=created.install)
 
 
 async def delete_workspace(window_id: str) -> bool:
@@ -151,15 +172,26 @@ async def delete_workspace(window_id: str) -> bool:
     inside a node_modules tree have been known to defeat ``rmtree``, so
     failures are logged and the function still clears the sidecar bookkeeping
     so the orphan is visible to the GC sweep.
+
+    The path comes from the sidecar's recorded ``workspace_path`` — NOT
+    ``workspace_for_window(window_id)`` — because the new-session picker's
+    clone strategy provisions to a ``pending-<uuid>`` directory that does not
+    follow the window-id naming. Falls back to the window-id path only when no
+    sidecar path is recorded (legacy / pre-pick provisioning).
     """
-    workspace = workspace_for_window(window_id)
+    sidecar = state.load(window_id)
+    recorded = (
+        Path(sidecar.workspace_path)
+        if sidecar is not None and sidecar.workspace_path
+        else workspace_for_window(window_id)
+    )
     removed = False
-    if workspace.exists():
+    if recorded.exists():
         try:
-            shutil.rmtree(workspace)
+            shutil.rmtree(recorded)
             removed = True
         except OSError as exc:
-            logger.warning("Failed to remove workspace %s: %s", workspace, exc)
+            logger.warning("Failed to remove workspace %s: %s", recorded, exc)
 
     async with state.transaction(window_id):
         sidecar = state.load(window_id)

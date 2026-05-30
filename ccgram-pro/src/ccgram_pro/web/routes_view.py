@@ -205,6 +205,15 @@ _PAGE_TEMPLATE = """\
 _INFINITE_SCROLL_JS = """\
 <script>
 (function () {
+  // Messages render oldest→newest top-to-bottom (the "load older" sentinel is
+  // at the top), so jump to the bottom on load to land on the latest message.
+  // Done before the early-return so it runs even when there's no sentinel
+  // (short conversations); the top sentinel won't be in view afterwards, so
+  // this never triggers an immediate older-load.
+  function toBottom() { window.scrollTo(0, document.documentElement.scrollHeight); }
+  toBottom();
+  requestAnimationFrame(toBottom);
+
   var sentinel = document.getElementById('load-older');
   var container = document.getElementById('transcript');
   if (!sentinel || !container) return;

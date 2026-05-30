@@ -97,9 +97,32 @@ def _check_entry_points() -> Status:
     return overall
 
 
+def _load_config_env() -> None:
+    """Load ``.env`` like ccgram does, so ``Config()`` can construct on import.
+
+    Importing ``ccgram.main`` instantiates ``ccgram.config.Config`` at module
+    load, which requires ``TELEGRAM_BOT_TOKEN``. ``Config.__init__`` itself
+    reads the config-dir ``.env`` first — but only *after* we've already
+    triggered the import. So mirror its order here (local ``.env`` wins, then
+    ``<ccgram_dir>/.env``) before the import, letting ``doctor`` succeed on a
+    configured host without the operator having to export the token by hand.
+    """
+    # Lazy: dotenv + ccgram.utils are only needed for this one check.
+    from ccgram.utils import ccgram_dir
+
+    # Lazy: dotenv only needed for this check.
+    from dotenv import load_dotenv
+
+    for env_path in (Path(".env"), ccgram_dir() / ".env"):
+        if env_path.is_file():
+            # override=False (default): first-loaded wins, matching ccgram.
+            load_dotenv(env_path)
+
+
 def _check_dispatch_sites() -> Status:
     """Confirm ccgram's host has the hook dispatch sites we depend on."""
     try:
+        _load_config_env()
         # Lazy: ccgram is the host package; importing inside the check lets
         # us report a usable error if ccgram is uninstalled or partially
         # installed, instead of failing at module load.
@@ -107,6 +130,19 @@ def _check_dispatch_sites() -> Status:
     except ImportError as exc:
         _emit("FAIL", "Import ccgram", str(exc))
         return "FAIL"
+    except ValueError as exc:
+        # ccgram.config.Config() raises ValueError when TELEGRAM_BOT_TOKEN is
+        # absent. On a fresh, otherwise-correct install the operator simply
+        # hasn't configured the token yet — report a clean WARN with the
+        # remedy instead of crashing with a traceback (the README documents
+        # `ccgram-pro doctor` as the post-install step).
+        _emit(
+            "WARN",
+            "Import ccgram.main",
+            f"config not loadable ({exc}); set TELEGRAM_BOT_TOKEN / ALLOWED_USERS "
+            "in ~/.ccgram/.env, then re-run doctor",
+        )
+        return "WARN"
 
     overall: Status = "OK"
     if not hasattr(_bootstrap, "dispatch_extensions"):

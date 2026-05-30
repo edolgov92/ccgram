@@ -70,6 +70,46 @@ def test_check_dispatch_sites_detects_present(
     assert "_resolve_miniapp_factory" in out
 
 
+def test_load_config_env_reads_ccgram_dir_env(
+    isolated_ccgram_dir, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    env_file = isolated_ccgram_dir / ".env"
+    env_file.write_text("TELEGRAM_BOT_TOKEN=from-config-dir\nALLOWED_USERS=1\n")
+    monkeypatch.chdir(isolated_ccgram_dir.parent)
+    doctor._load_config_env()
+    import os
+
+    assert os.environ["TELEGRAM_BOT_TOKEN"] == "from-config-dir"
+
+
+def test_check_dispatch_sites_warns_when_config_unloadable(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def boom() -> None:
+        raise ValueError("TELEGRAM_BOT_TOKEN environment variable is required")
+
+    monkeypatch.setattr(doctor, "_load_config_env", boom)
+    status = doctor._check_dispatch_sites()
+    assert status == "WARN"
+    out = capsys.readouterr().out
+    assert "TELEGRAM_BOT_TOKEN" in out
+    assert "Traceback" not in out
+
+
+def test_run_doctor_returns_zero_when_config_unloadable(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def boom() -> None:
+        raise ValueError("TELEGRAM_BOT_TOKEN environment variable is required")
+
+    monkeypatch.setattr(doctor, "_load_config_env", boom)
+    rc = doctor.run_doctor()
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "WARN" in out
+
+
 def test_check_layer_dirs_succeeds(capsys: pytest.CaptureFixture[str]) -> None:
     status = doctor._check_layer_dirs()
     assert status == "OK"

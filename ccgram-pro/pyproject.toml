@@ -77,10 +77,16 @@ max-complexity = 10
 "src/ccgram_pro/share/store.py" = ["N818"]
 "src/ccgram_pro/share/tokens.py" = ["N818"]
 "src/ccgram_pro/output_pipeline/transcript_events.py" = ["C901", "PLR0912"]
+# Diff-line rendering with payload caps + gutter accounting is branchy.
+"src/ccgram_pro/web/diff_render.py" = ["C901"]
 "src/ccgram_pro/output_pipeline/summarizer.py" = ["C901", "PLR0912"]
-# Picker callback dispatch (radio rows) + positional-arg unwrap of the
-# wrapped _create_window_and_bind.
-"src/ccgram_pro/new_session.py" = ["C901", "PLR2004"]
+# Picker callback dispatch (radio rows) + multi-strategy Start handler —
+# inherently branchy, same exemption ccgram grants its own callback dispatchers.
+"src/ccgram_pro/new_session.py" = ["C901", "PLR0911", "PLR0912", "PLR2004"]
+# Git/PR composer: button-action router dispatches a dozen callbacks.
+"src/ccgram_pro/git_composer.py" = ["C901", "PLR0912"]
+# Settings callback dispatch: ownership/validity/provider guard-returns.
+"src/ccgram_pro/settings_panel.py" = ["PLR0911"]
 # Small, readable threshold constants inline in handlers.
 "src/ccgram_pro/handlers/pr_fix_command.py" = ["PLR2004"]
 "src/ccgram_pro/input_pipeline/callbacks.py" = ["PLR2004"]

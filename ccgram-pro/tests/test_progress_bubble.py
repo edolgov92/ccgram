@@ -53,6 +53,21 @@ async def test_start_bubble_is_idempotent_per_window() -> None:
     assert bot.send_message.await_count == 1
 
 
+async def test_tick_edit_failure_drops_registry_entry(monkeypatch) -> None:
+    """If editing the bubble keeps failing, the entry is dropped so a later
+    turn's start_bubble can re-post instead of no-op'ing forever."""
+    monkeypatch.setattr(progress_bubble, "_TICK_INTERVAL_SECONDS", 0.01)
+    bot = _make_bot()
+    bot.edit_message_text = AsyncMock(side_effect=RuntimeError("deleted"))
+    await progress_bubble.start_bubble(window_id="@1", bot=bot, chat_id=1, thread_id=1)
+    assert progress_bubble.is_active("@1")
+    await asyncio.sleep(0.05)  # let the tick loop fire + fail + clean up
+    assert not progress_bubble.is_active("@1")
+    # A fresh start now succeeds (re-posts) rather than no-op'ing.
+    await progress_bubble.start_bubble(window_id="@1", bot=bot, chat_id=1, thread_id=1)
+    assert bot.send_message.await_count == 2
+
+
 async def test_start_bubble_isolates_different_windows() -> None:
     bot = _make_bot()
     await progress_bubble.start_bubble(window_id="@a", bot=bot, chat_id=1, thread_id=1)

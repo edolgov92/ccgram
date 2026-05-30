@@ -135,6 +135,20 @@ def clear_status_message(user_id: int, thread_id: int) -> int | None:
 # ── Patches ────────────────────────────────────────────────────────────
 
 
+async def _touch_workspace_activity(window_id: str) -> None:
+    """Refresh ``last_activity_at`` for windows backed by a per-session clone."""
+    # Lazy: deferred to avoid a heavy/cyclic import at module load.
+    from .. import state
+
+    sidecar = state.load(window_id)
+    if sidecar is None or not sidecar.workspace_path:
+        return
+    # Lazy: deferred to avoid a heavy/cyclic import at module load.
+    from ..workspaces.manager import touch_activity
+
+    await touch_activity(window_id)
+
+
 async def _wrapped_forward_message(
     window_id: str,
     user_id: int,
@@ -150,6 +164,11 @@ async def _wrapped_forward_message(
     intact. After a direct (non-batched) forward, the progress bubble
     is started so the user sees "🔧 Working…" until Claude completes.
     """
+    # A user message is the clearest "session is alive" signal — refresh the
+    # workspace activity timestamp so the idle GC doesn't reap an actively-used
+    # per-session clone. No-op for windows without a workspace (the common case).
+    await _touch_workspace_activity(window_id)
+
     if not _is_batched(window_id):
         await _ORIGINAL_FORWARD_MESSAGE(
             window_id, user_id, thread_id, text, client, message

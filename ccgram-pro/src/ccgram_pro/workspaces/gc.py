@@ -86,11 +86,18 @@ def _sweep_idle(now: float, idle_seconds: int) -> int:
     return removed
 
 
-def _sweep_orphans() -> int:
+# Grace window: a just-provisioned clone exists on disk for a few moments
+# before the new-session flow records its path on the sidecar. Don't reap a
+# directory younger than this as an "orphan" — it may simply not be linked yet.
+_ORPHAN_GRACE_SECONDS = 600
+
+
+def _sweep_orphans(now: float | None = None) -> int:
     """Remove workspace directories that no sidecar references."""
     root = workspaces_dir()
     if not root.is_dir():
         return 0
+    effective_now = time.time() if now is None else now
     sidecar_paths = {
         sidecar.workspace_path
         for sidecar in state.all_sidecars()
@@ -108,6 +115,14 @@ def _sweep_orphans() -> int:
         # we don't recognise as a known window_id stays UNLESS no sidecar
         # claims its absolute path.
         if str(entry) in sidecar_paths:
+            continue
+        # Grace period: a clone provisioned moments ago may not have had its
+        # path recorded on the sidecar yet (the new-session Start writes it
+        # after the window binds). Don't mistake that for an orphan.
+        try:
+            if effective_now - entry.stat().st_mtime < _ORPHAN_GRACE_SECONDS:
+                continue
+        except OSError:
             continue
         if _try_rmtree(entry):
             logger.info("GC removed orphan workspace %s", entry)
@@ -130,7 +145,7 @@ def sweep(
     effective_settings = settings or load_settings().workspaces
     idle_seconds = _seconds(effective_settings.idle_days)
     idle_removed = _sweep_idle(effective_now, idle_seconds)
-    orphans_removed = _sweep_orphans()
+    orphans_removed = _sweep_orphans(effective_now)
     return SweepResult(idle_removed=idle_removed, orphans_removed=orphans_removed)
 
 

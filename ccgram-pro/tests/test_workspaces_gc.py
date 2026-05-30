@@ -72,15 +72,33 @@ def test_sweep_idle_skips_sidecar_with_no_activity_timestamp(tmp_path: Path) -> 
     assert ws.exists()
 
 
+def _backdate(path: Path, seconds: int) -> None:
+    import os
+
+    past = time.time() - seconds
+    os.utime(path, (past, past))
+
+
 def test_sweep_removes_orphan_workspace_directories(tmp_path: Path) -> None:
     """Workspaces on disk without an owning sidecar should be cleaned up."""
     ensure_layer_dirs()
     orphan = workspaces_dir() / "orphan-window"
     orphan.mkdir(parents=True)
     (orphan / "stuff").write_text("noise", encoding="utf-8")
+    _backdate(orphan, gc._ORPHAN_GRACE_SECONDS + 60)
     result = gc.sweep(settings=WorkspaceSettings())
     assert result.orphans_removed == 1
     assert not orphan.exists()
+
+
+def test_sweep_skips_fresh_orphan_within_grace(tmp_path: Path) -> None:
+    """A just-provisioned dir not yet linked to a sidecar survives one sweep."""
+    ensure_layer_dirs()
+    fresh = workspaces_dir() / "pending-abc123"
+    fresh.mkdir(parents=True)
+    result = gc.sweep(settings=WorkspaceSettings())
+    assert result.orphans_removed == 0
+    assert fresh.exists()
 
 
 def test_sweep_does_not_remove_stage_dirs(tmp_path: Path) -> None:
@@ -97,7 +115,9 @@ def test_sweep_total_combines_idle_and_orphans(tmp_path: Path) -> None:
     _make_sidecar_with_workspace("@old1", age_days=10)
     _make_sidecar_with_workspace("@old2", age_days=12)
     ensure_layer_dirs()
-    (workspaces_dir() / "orphan").mkdir(parents=True)
+    orphan = workspaces_dir() / "orphan"
+    orphan.mkdir(parents=True)
+    _backdate(orphan, gc._ORPHAN_GRACE_SECONDS + 60)
     result = gc.sweep(settings=WorkspaceSettings(idle_days=5))
     assert result.idle_removed == 2
     assert result.orphans_removed == 1

@@ -1,18 +1,17 @@
-"""Plan-mode auto-entry.
+"""Plan-mode support.
 
-When ``settings.defaults.plan_mode_on_new_session`` is true (the layer's
-default), every fresh Claude window gets a Shift+Tab sent to it shortly
-after launch so the operator's first prompt arrives in plan mode. Claude
-then produces an ``ExitPlanMode`` tool call before doing anything
-destructive — the upstream interactive UI handles the Approve / Edit
-prompt over Telegram (we don't replace that flow).
+New sessions enter plan mode deterministically via the
+``--permission-mode plan`` launch flag (wired in ``new_session``); there is no
+Shift+Tab auto-entry orchestration. This package provides:
 
-This module wraps :func:`ccgram.handlers.topics.directory_callbacks._create_window_and_bind`
-so post-creation we schedule an asynchronous "enter plan mode" task that
-polls the pane for readiness, sends the key sequence, and verifies the
-mode flipped.
+- :func:`install_plan_approval_surface` — augments ccgram's native
+  ExitPlanMode prompt with a ⚙️ Settings button (the approval keyboard itself
+  stays ccgram's, driving the real pane).
+- :func:`drive_to_mode` — bounded Shift+Tab driver used by the Settings panel
+  to switch a running session between plan and coding mode.
 """
 
-from .orchestrator import install_plan_mode_entry
+from .approval_surface import install_plan_approval_surface
+from .mode_control import drive_to_mode
 
-__all__ = ["install_plan_mode_entry"]
+__all__ = ["drive_to_mode", "install_plan_approval_surface"]

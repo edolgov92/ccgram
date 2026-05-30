@@ -78,8 +78,11 @@ async def _tick_loop(window_id: str, bot: Any) -> None:
                 logger.debug(
                     "progress bubble edit failed for %s", window_id, exc_info=True
                 )
-                # If editing keeps failing (e.g. user deleted the message)
-                # we stop trying — the user can still see their reply.
+                # If editing keeps failing (e.g. user deleted the message) we
+                # stop trying AND drop the registry entry, so a later turn's
+                # start_bubble can post a fresh one instead of no-op'ing
+                # forever on a stale "active" record.
+                _bubbles.pop(window_id, None)
                 return
     except asyncio.CancelledError:
         return

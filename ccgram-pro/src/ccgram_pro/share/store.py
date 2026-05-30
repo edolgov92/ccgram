@@ -12,8 +12,11 @@ volume and shorter than UUID hex.
 
 from __future__ import annotations
 
+import contextlib
 import json
+import os
 import secrets
+import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -55,6 +58,28 @@ def _new_share_id() -> str:
     return secrets.token_urlsafe(16).lower().replace("-", "").replace("_", "")[:24]
 
 
+def _atomic_write_text(path: Path, payload: str) -> None:
+    """Write *payload* to *path* via temp + os.replace (all-or-nothing)."""
+    tmp_name: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=path.name + ".",
+            suffix=".tmp",
+            delete=False,
+        ) as fh:
+            tmp_name = fh.name
+            fh.write(payload)
+        os.replace(tmp_name, path)
+        tmp_name = None
+    finally:
+        if tmp_name is not None:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp_name)
+
+
 def save_share(
     *,
     kind: ShareKind,
@@ -73,7 +98,10 @@ def save_share(
     share_id = _new_share_id()
     root = shares_dir() / share_id
     root.mkdir(parents=True, exist_ok=True)
-    (root / "content.md").write_text(body_markdown, encoding="utf-8")
+    # Atomic, content-first: a reader requires BOTH files, and each is written
+    # all-or-nothing (temp + os.replace), so a crash can never surface a
+    # half-written share as complete.
+    _atomic_write_text(root / "content.md", body_markdown)
     meta = {
         "share_id": share_id,
         "kind": kind,
@@ -82,9 +110,7 @@ def save_share(
         "created_at": time.time(),
         "extra": extra_meta or {},
     }
-    (root / "meta.json").write_text(
-        json.dumps(meta, indent=2, sort_keys=True), encoding="utf-8"
-    )
+    _atomic_write_text(root / "meta.json", json.dumps(meta, indent=2, sort_keys=True))
     logger.debug("share saved: id=%s kind=%s title=%r", share_id, kind, title[:80])
     return share_id
 

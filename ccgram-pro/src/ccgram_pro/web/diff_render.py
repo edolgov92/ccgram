@@ -39,14 +39,28 @@ def _stat_for(file: DiffFile) -> tuple[int, int]:
     return adds, dels
 
 
+# Payload caps: a multi-MB diff would OOM a phone browser and bloat the HTTP
+# response. Bound files rendered, lines per file, and per-line length, with an
+# explicit truncation notice so the cut is never silent.
+_MAX_FILES = 80
+_MAX_LINES_PER_FILE = 1500
+_MAX_LINE_LEN = 1000
+
+
 def render_diff_html(
     files: list[DiffFile], *, empty_message: str = "No changes."
 ) -> str:
-    """Return the HTML body for a list of parsed diff files."""
+    """Return the HTML body for a list of parsed diff files (payload-capped)."""
     if not files:
         return f'<p style="color: var(--muted);">{html.escape(empty_message)}</p>'
+    shown = files[:_MAX_FILES]
     parts: list[str] = [_render_file_list(files)]
-    for idx, file in enumerate(files):
+    if len(files) > _MAX_FILES:
+        parts.append(
+            f'<p style="color: var(--muted);">… {len(files) - _MAX_FILES} more '
+            "file(s) omitted (diff truncated).</p>"
+        )
+    for idx, file in enumerate(shown):
         parts.append(_render_file(file, idx))
     return "\n".join(parts)
 
@@ -86,11 +100,20 @@ def _render_file(file: DiffFile, idx: int) -> str:
         parts.append("</section>")
         return "\n".join(parts)
     parts.append('  <div class="body">')
+    rendered = 0
+    truncated = False
     for hunk in file.hunks:
+        if rendered >= _MAX_LINES_PER_FILE:
+            truncated = True
+            break
         parts.append(f'    <div class="hunk-header">{html.escape(hunk.header)}</div>')
         old_no = hunk.old_start
         new_no = hunk.new_start
         for marker, content in hunk.lines:
+            if rendered >= _MAX_LINES_PER_FILE:
+                truncated = True
+                break
+            rendered += 1
             row_class = "add" if marker == "+" else ("del" if marker == "-" else "")
             if marker == "+":
                 gutter = f"+{new_no}"
@@ -102,12 +125,22 @@ def _render_file(file: DiffFile, idx: int) -> str:
                 gutter = f"{new_no}"
                 old_no += 1
                 new_no += 1
+            shown = (
+                content
+                if len(content) <= _MAX_LINE_LEN
+                else content[:_MAX_LINE_LEN] + " …"
+            )
             parts.append(
                 f'    <div class="line {row_class}">'
                 f'<span class="gut">{gutter}</span>'
-                f'<span class="body">{html.escape(content)}</span>'
+                f'<span class="body">{html.escape(shown)}</span>'
                 "</div>"
             )
+    if truncated:
+        parts.append(
+            '    <div class="line" style="color: var(--muted);">'
+            f"… file diff truncated at {_MAX_LINES_PER_FILE} lines.</div>"
+        )
     parts.append("  </div>")
     parts.append("</section>")
     return "\n".join(parts)

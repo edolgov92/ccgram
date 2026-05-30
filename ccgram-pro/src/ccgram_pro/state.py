@@ -78,6 +78,15 @@ class WindowSidecar:
     reasoning: str = "extra-high"
     batch_mode: bool = True
     silent_mode: bool = True
+    # "coding" | "plan" — the session's working mode, chosen in the new-session
+    # picker and changeable live via the Settings panel. Distinct from
+    # ``plan_mode`` below (which tracks the plan *approval* lifecycle).
+    mode: str = "coding"
+    # "current" | "worktree" | "clone" — how the session's working directory
+    # was provisioned, chosen in the new-session picker.
+    workspace_strategy: str = "current"
+    # The branch the session was started from (None when not git / not chosen).
+    base_branch: str | None = None
     current_batch: list[BatchItem] = field(default_factory=list)
     preamble_sent: bool = False
     plan_mode: str = "pending"  # "pending" | "entered" | "approved" | "skipped"
@@ -206,6 +215,9 @@ def _deserialize(raw: str, window_id: str, path: Path) -> WindowSidecar | None:
             reasoning=str(data.get("reasoning", "extra-high")),
             batch_mode=bool(data.get("batch_mode", True)),
             silent_mode=bool(data.get("silent_mode", True)),
+            mode=str(data.get("mode", "coding")),
+            workspace_strategy=str(data.get("workspace_strategy", "current")),
+            base_branch=data.get("base_branch") or None,
             current_batch=items,
             preamble_sent=bool(data.get("preamble_sent", False)),
             plan_mode=str(data.get("plan_mode", "pending")),
@@ -368,6 +380,18 @@ def update(window_id: str, **changes: Any) -> WindowSidecar | None:  # noqa: ANN
         setattr(sidecar, key, value)
     save(sidecar)
     return sidecar
+
+
+async def update_locked(window_id: str, **changes: Any) -> WindowSidecar | None:  # noqa: ANN401 -- dataclass field setter passthrough
+    """Async, race-safe :func:`update` — holds the per-window transaction lock.
+
+    Concurrent callbacks (Settings taps, composer actions) that load-mutate-save
+    the same sidecar would otherwise lose updates through the read/write window
+    in :func:`update`. This wraps the same logic inside :func:`transaction` so
+    only one mutation runs at a time per window.
+    """
+    async with transaction(window_id):
+        return update(window_id, **changes)
 
 
 def _lock_for(window_id: str) -> asyncio.Lock:

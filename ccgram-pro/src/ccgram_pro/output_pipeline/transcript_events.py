@@ -96,8 +96,10 @@ def extract_events(
         content = message.get("content")
 
         if isinstance(content, str):
-            if content.strip():
-                events.append(TurnEvent(kind=_role_kind(role), text=content))
+            kind = _role_kind(role)
+            text = _clean_text(content, kind)
+            if text.strip():
+                events.append(TurnEvent(kind=kind, text=text))
             continue
 
         if not isinstance(content, list):
@@ -108,9 +110,10 @@ def extract_events(
                 continue
             btype = block.get("type", "")
             if btype == "text":
-                text = block.get("text", "")
+                kind = _role_kind(role)
+                text = _clean_text(block.get("text", ""), kind)
                 if text.strip():
-                    events.append(TurnEvent(kind=_role_kind(role), text=text))
+                    events.append(TurnEvent(kind=kind, text=text))
             elif btype == "thinking":
                 text = block.get("text") or block.get("thinking", "")
                 if text.strip():
@@ -144,6 +147,16 @@ def extract_events(
 def _role_kind(role: str) -> str:
     """Map a transcript role to a renderer kind."""
     return "user" if role == "user" else "assistant"
+
+
+def _clean_text(text: str, kind: str) -> str:
+    """Strip the Telegram-only TL;DR block from assistant text for the web view."""
+    if kind != "assistant":
+        return text
+    # Lazy: tldr is a pure-stdlib layer module.
+    from .tldr import strip_tldr
+
+    return strip_tldr(text)
 
 
 def events_to_dicts(events: list[TurnEvent]) -> list[dict]:

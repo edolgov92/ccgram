@@ -33,17 +33,21 @@ def test_install_is_idempotent_and_creates_layer_dirs(
 
     # Avoid touching real ccgram modules from inside install_input_pipeline
     # by neutering the install guards on every wrapped subsystem.
+    from ccgram_pro import git_composer as git_composer_mod
     from ccgram_pro import handlers as layer_handlers_mod
     from ccgram_pro import new_session as new_session_mod
+    from ccgram_pro import settings_panel as settings_panel_mod
     from ccgram_pro.input_pipeline import intercept as intercept_mod
     from ccgram_pro.output_pipeline import silencer as silencer_mod
     from ccgram_pro.output_pipeline import summarizer as summarizer_mod
-    from ccgram_pro.plan_mode import orchestrator as plan_mode_mod
+    from ccgram_pro.plan_mode import approval_surface as approval_surface_mod
 
     intercept_mod._reset_for_testing()
     silencer_mod._reset_for_testing()
     summarizer_mod._reset_for_testing()
-    plan_mode_mod._reset_for_testing()
+    approval_surface_mod._reset_for_testing()
+    settings_panel_mod._reset_for_testing()
+    git_composer_mod._reset_for_testing()
     layer_handlers_mod._reset_for_testing()
     new_session_mod._reset_for_testing()
 

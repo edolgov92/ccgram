@@ -205,16 +205,31 @@ def _handle_new_message_silent(msg: object, *_args: Any, **_kwargs: Any) -> bool
 
     Allow-through cases:
 
-    - role == "assistant" with content_type == "tool_use"/"tool_result"
-      → already covered by ccgram's CCGRAM_HIDE_TOOL_CALLS; we don't
-      override either way.
+    - Interactive prompts (ExitPlanMode / AskUserQuestion / Permission) are
+      blocking UI, not chatter — they MUST reach the user even in silent mode.
+      Letting ``handle_new_message`` run fires ccgram's interactive detection
+      immediately (the fast path), instead of waiting on the Notification hook
+      or the 1s polling tick.
     """
     session_id = getattr(msg, "session_id", "")
     if not session_id:
         return False
-    # Suppress everything ccgram would route through here in silent mode;
+    if getattr(msg, "content_type", "") == "tool_use" and _is_interactive_tool(
+        getattr(msg, "tool_name", "") or ""
+    ):
+        return False
+    # Suppress everything else ccgram would route through here in silent mode;
     # the Stop summarizer is what the user sees instead.
     return _is_silent_for_session(session_id)
+
+
+def _is_interactive_tool(tool_name: str) -> bool:
+    if not tool_name:
+        return False
+    # Lazy: interactive package pulls PTB types; only needed on this check.
+    from ccgram.handlers.interactive import INTERACTIVE_TOOL_NAMES
+
+    return tool_name in INTERACTIVE_TOOL_NAMES
 
 
 # ── Install / uninstall ────────────────────────────────────────────────
@@ -235,91 +250,157 @@ def install_silencer() -> None:
     if _installed:
         return
 
-    # Lazy: pulling these imports inside install() keeps the silencer
-    # module safe to import in tests that don't want PTB / aiohttp loaded.
-    from ccgram.handlers.messaging_pipeline import message_queue as message_queue_mod
-
-    # Lazy: ccgram internal — deferred to avoid an import cycle with ccgram bootstrap (the layer is imported during bootstrap).
-    from ccgram.handlers.polling.window_tick import apply as apply_mod
-
-    # Lazy: ccgram internal — deferred to avoid an import cycle with ccgram bootstrap (the layer is imported during bootstrap).
-    from ccgram.handlers.status import topic_emoji as topic_emoji_mod
-
-    # 1) Topic emoji renames. ALL importers of update_topic_emoji.
-    original_topic_emoji = topic_emoji_mod.update_topic_emoji
-    silenced_topic_emoji = _wrap_async(
-        "update_topic_emoji", original_topic_emoji, _topic_emoji_silent
+    # Each group is fault-isolated: an upstream rename that breaks one patch
+    # (ImportError/AttributeError) degrades that single feature, not the whole
+    # silencer. Already-wrapped attributes (re-install after a partial failure)
+    # are detected via ``__wrapped__`` so we never double-wrap.
+    ok = (
+        _install_topic_emoji()
+        & _install_status_bubble()
+        & _install_typing()
+        & _install_new_message_echo()
     )
-    # Lazy: ccgram internal — deferred to avoid an import cycle with ccgram bootstrap (the layer is imported during bootstrap).
-    from ccgram.handlers import hook_events as hook_events_mod
-
-    for mod in (apply_mod, topic_emoji_mod, hook_events_mod):
-        if hasattr(mod, "update_topic_emoji"):
-            mod.update_topic_emoji = silenced_topic_emoji  # type: ignore[assignment]
-
-    # 2) Status bubble. ALL importers of enqueue_status_update — checked
-    # via ``grep -rn "from .*message_queue import"`` to enumerate.
-    original_status_update = message_queue_mod.enqueue_status_update
-    silenced_status_update = _wrap_async(
-        "enqueue_status_update", original_status_update, _status_update_silent
-    )
-    # Lazy: ccgram internal — deferred to avoid an import cycle with ccgram bootstrap (the layer is imported during bootstrap).
-    from ccgram.handlers import cleanup as cleanup_mod
-
-    # Lazy: ccgram internal — deferred to avoid an import cycle with ccgram bootstrap (the layer is imported during bootstrap).
-    from ccgram.handlers.commands import forward as forward_mod
-
-    # Lazy: ccgram internal — deferred to avoid an import cycle with ccgram bootstrap (the layer is imported during bootstrap).
-    from ccgram.handlers.shell import shell_commands as shell_commands_mod
-
-    # Lazy: ccgram internal — deferred to avoid an import cycle with ccgram bootstrap (the layer is imported during bootstrap).
-    from ccgram.handlers.text import text_handler as text_handler_mod
-
-    for mod in (
-        message_queue_mod,
-        apply_mod,
-        hook_events_mod,
-        cleanup_mod,
-        forward_mod,
-        shell_commands_mod,
-        text_handler_mod,
-    ):
-        if hasattr(mod, "enqueue_status_update"):
-            mod.enqueue_status_update = silenced_status_update  # type: ignore[assignment]
-
-    # 3) Typing indicator. Defined inside apply.py — single-site.
-    original_typing = apply_mod._send_typing_throttled
-    silenced_typing = _wrap_async(
-        "_send_typing_throttled", original_typing, _typing_silent
-    )
-    apply_mod._send_typing_throttled = silenced_typing  # type: ignore[assignment]
-
-    # 4) Transcript-driven user/thinking echo. handle_new_message is
-    # imported into bootstrap to build the SessionMonitor callback
-    # closure. Patching bootstrap.handle_new_message is the magic that
-    # actually takes effect, since the closure resolves the name via
-    # bootstrap's module globals at each call.
-    # Lazy: ccgram internal — deferred to avoid an import cycle with ccgram bootstrap (the layer is imported during bootstrap).
-    from ccgram import bootstrap as bootstrap_mod
-
-    # Lazy: ccgram internal — deferred to avoid an import cycle with ccgram bootstrap (the layer is imported during bootstrap).
-    from ccgram.handlers.messaging_pipeline import (
-        message_routing as message_routing_mod,
-    )
-
-    original_new_message = message_routing_mod.handle_new_message
-    silenced_new_message = _wrap_async(
-        "handle_new_message", original_new_message, _handle_new_message_silent
-    )
-    message_routing_mod.handle_new_message = silenced_new_message  # type: ignore[assignment]
-    bootstrap_mod.handle_new_message = silenced_new_message  # type: ignore[assignment]
 
     _installed = True
     logger.info(
-        "ccgram-pro silencer installed — silent_mode topics suppress topic "
-        "emoji, status bubble, typing indicator, and user/thinking echo across "
-        "all known importers"
+        "ccgram-pro silencer installed%s — silent_mode topics suppress topic "
+        "emoji, status bubble, typing indicator, and user/thinking echo",
+        "" if ok else " (with degraded patches; see warnings)",
     )
+
+
+def _already_wrapped(value: Any) -> bool:
+    return getattr(value, "__wrapped__", None) is not None
+
+
+def _patch_importers(
+    attr: str, wrapped: Callable[..., Any], modules: list[Any]
+) -> None:
+    for mod in modules:
+        if hasattr(mod, attr) and not _already_wrapped(getattr(mod, attr)):
+            setattr(mod, attr, wrapped)
+
+
+def _install_topic_emoji() -> bool:
+    try:
+        # Lazy: ccgram internal — deferred to avoid a bootstrap import cycle.
+        from ccgram.handlers import hook_events as hook_events_mod
+
+        # Lazy: ccgram internal — deferred to avoid a bootstrap import cycle.
+        from ccgram.handlers.polling.window_tick import apply as apply_mod
+
+        # Lazy: ccgram internal — deferred to avoid a bootstrap import cycle.
+        from ccgram.handlers.status import topic_emoji as topic_emoji_mod
+
+        if _already_wrapped(topic_emoji_mod.update_topic_emoji):
+            return True
+        wrapped = _wrap_async(
+            "update_topic_emoji",
+            topic_emoji_mod.update_topic_emoji,
+            _topic_emoji_silent,
+        )
+        _patch_importers(
+            "update_topic_emoji", wrapped, [apply_mod, topic_emoji_mod, hook_events_mod]
+        )
+        return True
+    except ImportError, AttributeError:
+        logger.warning("silencer: topic-emoji patch skipped", exc_info=True)
+        return False
+
+
+def _install_status_bubble() -> bool:
+    try:
+        # Lazy: ccgram internal — deferred to avoid a bootstrap import cycle.
+        from ccgram.handlers import cleanup as cleanup_mod
+
+        # Lazy: ccgram internal — deferred to avoid a bootstrap import cycle.
+        from ccgram.handlers import hook_events as hook_events_mod
+
+        # Lazy: ccgram internal — deferred to avoid a bootstrap import cycle.
+        from ccgram.handlers.commands import forward as forward_mod
+
+        # Lazy: ccgram internal — deferred to avoid a bootstrap import cycle.
+        from ccgram.handlers.messaging_pipeline import (
+            message_queue as message_queue_mod,
+        )
+
+        # Lazy: ccgram internal — deferred to avoid a bootstrap import cycle.
+        from ccgram.handlers.polling.window_tick import apply as apply_mod
+
+        # Lazy: ccgram internal — deferred to avoid a bootstrap import cycle.
+        from ccgram.handlers.shell import shell_commands as shell_commands_mod
+
+        # Lazy: ccgram internal — deferred to avoid a bootstrap import cycle.
+        from ccgram.handlers.text import text_handler as text_handler_mod
+
+        if _already_wrapped(message_queue_mod.enqueue_status_update):
+            return True
+        wrapped = _wrap_async(
+            "enqueue_status_update",
+            message_queue_mod.enqueue_status_update,
+            _status_update_silent,
+        )
+        _patch_importers(
+            "enqueue_status_update",
+            wrapped,
+            [
+                message_queue_mod,
+                apply_mod,
+                hook_events_mod,
+                cleanup_mod,
+                forward_mod,
+                shell_commands_mod,
+                text_handler_mod,
+            ],
+        )
+        return True
+    except ImportError, AttributeError:
+        logger.warning("silencer: status-bubble patch skipped", exc_info=True)
+        return False
+
+
+def _install_typing() -> bool:
+    try:
+        # Lazy: ccgram internal — deferred to avoid a bootstrap import cycle.
+        from ccgram.handlers.polling.window_tick import apply as apply_mod
+
+        if _already_wrapped(apply_mod._send_typing_throttled):
+            return True
+        apply_mod._send_typing_throttled = _wrap_async(  # type: ignore[assignment]
+            "_send_typing_throttled", apply_mod._send_typing_throttled, _typing_silent
+        )
+        return True
+    except ImportError, AttributeError:
+        logger.warning("silencer: typing patch skipped", exc_info=True)
+        return False
+
+
+def _install_new_message_echo() -> bool:
+    # handle_new_message is imported into bootstrap to build the SessionMonitor
+    # callback closure; patching bootstrap's binding is what actually takes
+    # effect, since the closure resolves the name via bootstrap's globals.
+    try:
+        # Lazy: ccgram internal — deferred to avoid a bootstrap import cycle.
+        from ccgram import bootstrap as bootstrap_mod
+
+        # Lazy: ccgram internal — deferred to avoid a bootstrap import cycle.
+        from ccgram.handlers.messaging_pipeline import (
+            message_routing as message_routing_mod,
+        )
+
+        if _already_wrapped(message_routing_mod.handle_new_message):
+            return True
+        wrapped = _wrap_async(
+            "handle_new_message",
+            message_routing_mod.handle_new_message,
+            _handle_new_message_silent,
+        )
+        message_routing_mod.handle_new_message = wrapped  # type: ignore[assignment]
+        bootstrap_mod.handle_new_message = wrapped  # type: ignore[assignment]
+        return True
+    except ImportError, AttributeError:
+        logger.warning("silencer: new-message-echo patch skipped", exc_info=True)
+        return False
 
 
 def _reset_for_testing() -> None:

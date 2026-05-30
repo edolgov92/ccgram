@@ -39,86 +39,8 @@ logger = structlog.get_logger()
 # does not double-wrap ``_handle_stop``.
 _installed = False
 
-_LLM_SUMMARY_TIMEOUT_SECONDS = 5
 _MAX_INLINE_TEXT_CHARS = 350
 _BUTTON_LABEL = "📎 View full turn"
-
-
-def _build_long_view_markdown(transcript_path: str, num_turns: int) -> str:
-    """Read the most recent assistant turn out of *transcript_path*.
-
-    The JSONL transcript stores one event per line. We walk backwards from
-    EOF until we hit the *previous* user turn boundary, then return the
-    concatenated text of assistant messages + tool use/result content
-    that happened since.
-    """
-    lines: list[str] = []
-    try:
-        raw = Path(transcript_path).read_text(encoding="utf-8", errors="replace")
-    except OSError as exc:
-        logger.warning("could not read transcript %s: %s", transcript_path, exc)
-        return "_(transcript unavailable)_"
-    # Last 200 lines is enough — a single turn rarely produces more entries.
-    for raw_line in raw.splitlines()[-200:]:
-        try:
-            entry = json.loads(raw_line)
-        except json.JSONDecodeError:
-            continue
-        role = entry.get("role") or entry.get("type", "")
-        message = entry.get("message", {})
-        if not isinstance(message, dict):
-            continue
-        content = message.get("content")
-        if isinstance(content, list):
-            chunks = []
-            for block in content:
-                if not isinstance(block, dict):
-                    continue
-                btype = block.get("type", "")
-                if btype == "text":
-                    chunks.append(block.get("text", ""))
-                elif btype == "thinking":
-                    text = block.get("text") or block.get("thinking", "")
-                    if text:
-                        chunks.append(f"_thinking:_ {text}")
-                elif btype == "tool_use":
-                    name = block.get("name", "tool")
-                    tool_input = block.get("input", {})
-                    pretty = json.dumps(tool_input, indent=2, sort_keys=True)
-                    chunks.append(f"**`{name}`**\n```\n{pretty}\n```")
-                elif btype == "tool_result":
-                    tool_content = block.get("content", "")
-                    if isinstance(tool_content, list):
-                        tool_content = "\n".join(
-                            b.get("text", "") if isinstance(b, dict) else str(b)
-                            for b in tool_content
-                        )
-                    chunks.append(f"_tool result:_\n```\n{tool_content}\n```")
-            if chunks:
-                lines.append(f"### {role}\n" + "\n\n".join(chunks))
-        elif isinstance(content, str) and content:
-            lines.append(f"### {role}\n{content}")
-    if not lines:
-        return "_(empty turn)_"
-    header = (
-        f"_Turn ended after {num_turns} message(s). Full transcript content below._"
-    )
-    return f"{header}\n\n" + "\n\n---\n\n".join(lines[-30:])
-
-
-async def _safe_llm_summary(transcript_path: str) -> str | None:
-    """Best-effort one-line summary via the existing ccgram LLM completer."""
-    # Lazy: pulls in the LLM client; only needed inside the Stop path.
-    from ccgram.llm.summarizer import summarize_completion
-
-    try:
-        return await asyncio.wait_for(
-            summarize_completion(transcript_path),
-            timeout=_LLM_SUMMARY_TIMEOUT_SECONDS,
-        )
-    except TimeoutError, RuntimeError, OSError, ValueError:
-        logger.debug("LLM summary unavailable", exc_info=True)
-        return None
 
 
 async def _post_summary_message(
@@ -129,20 +51,27 @@ async def _post_summary_message(
     summary: str,
     link_url: str | None,
     diff_url: str | None = None,
+    window_id: str | None = None,
 ) -> None:
-    """Send the single Stop summary message with View-full and Diff buttons."""
+    """Send the single Stop summary message with View-full / Diff / Settings buttons."""
     # Lazy: PTB types pulled in only on the actual send path.
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
     # Lazy: PTB types only needed on the handler/send path.
     from telegram.error import TelegramError
 
-    buttons: list[InlineKeyboardButton] = []
+    # All actions on a single row (View full · View diff · Settings).
+    row: list[InlineKeyboardButton] = []
     if link_url:
-        buttons.append(InlineKeyboardButton(_BUTTON_LABEL, url=link_url))
+        row.append(InlineKeyboardButton(_BUTTON_LABEL, url=link_url))
     if diff_url:
-        buttons.append(InlineKeyboardButton("📊 View diff", url=diff_url))
-    reply_markup = InlineKeyboardMarkup([buttons]) if buttons else None
+        row.append(InlineKeyboardButton("📊 View diff", url=diff_url))
+    if window_id:
+        # Lazy: settings_panel installs alongside; import at send time.
+        from ..settings_panel import button_for_window
+
+        row.append(button_for_window(window_id))
+    reply_markup = InlineKeyboardMarkup([row]) if row else None
     try:
         await client.send_message(
             chat_id=chat_id,
@@ -179,11 +108,19 @@ async def _maybe_save_diff_snapshots(*, window_id: str, bot_token: str) -> str |
     if not view or not view.cwd:
         return None
 
-    existing = list_snapshots(window_id)
+    # git subprocesses block — keep them off the event loop.
+    existing = await asyncio.to_thread(list_snapshots, window_id)
     try:
         if "session" not in existing:
-            save_snapshot(window_id=window_id, label="session", project_root=view.cwd)
-        save_snapshot(window_id=window_id, label="iteration", project_root=view.cwd)
+            await asyncio.to_thread(
+                save_snapshot,
+                window_id=window_id,
+                label="session",
+                project_root=view.cwd,
+            )
+        await asyncio.to_thread(
+            save_snapshot, window_id=window_id, label="iteration", project_root=view.cwd
+        )
     except (GitOpError, ValueError) as exc:
         logger.debug("diff snapshot save failed for %s: %s", window_id, exc)
         return None
@@ -193,9 +130,6 @@ async def _maybe_save_diff_snapshots(*, window_id: str, bot_token: str) -> str |
         return None
     token = sign_share_token(bot_token=bot_token, share_id=window_id)
     return f"{base.rstrip('/')}/diff/{token}"
-
-
-_BRIEF_TURN_THRESHOLD_CHARS = 600
 
 
 def _extract_last_assistant_text_and_tool_count(
@@ -298,17 +232,13 @@ async def _handle_stop_summary(event: Any, client: Any) -> None:
     if bot_for_cleanup is not None:
         await progress_bubble.stop_bubble(window_id, bot_for_cleanup)
 
-    # Extract Claude's actual text + tool-use count for the just-finished
-    # turn. The summarizer's strategy depends on this:
-    # - Brief reply with no tool calls → use Claude's text verbatim
-    #   (no LLM hop, no garbage hallucination if the LLM has nothing to
-    #   summarise — the bug from the user's "Hi! What can I help you
-    #   with?" turn).
-    # - Did real work (tool calls or long text) → ask the LLM for a
-    #   one-line summary so the user gets a digestible message.
-    last_text, tool_count = _extract_last_assistant_text_and_tool_count(transcript_path)
-    is_brief_turn = (
-        tool_count == 0 and 0 < len(last_text) <= _BRIEF_TURN_THRESHOLD_CHARS
+    # Extract Claude's actual text for the just-finished turn. Claude itself
+    # produces the user-facing summary: an appended system prompt asks it to
+    # end substantive responses with a delimited TL;DR block (see
+    # ``output_pipeline.tldr``). We post that block to Telegram and strip it
+    # from the web "full chat" view. No third-party LLM hop.
+    last_text, _tool_count = _extract_last_assistant_text_and_tool_count(
+        transcript_path
     )
 
     # Store the turn as STRUCTURED events (JSON) so the /view page can
@@ -328,27 +258,23 @@ async def _handle_stop_summary(event: Any, client: Any) -> None:
         window_id=window_id,
     )
 
-    if is_brief_turn:
-        short = last_text.strip()
+    # Lazy: tldr is a pure-stdlib layer module.
+    from .tldr import extract_tldr, strip_tldr
+
+    tldr = extract_tldr(last_text)
+    if tldr:
+        short = tldr
+    elif last_text:
+        # No TL;DR block (trivial turn or Claude omitted it) → post the full
+        # last-assistant text, with any partial markers removed, truncated.
+        short = strip_tldr(last_text).strip()
     else:
-        summary = await _safe_llm_summary(transcript_path)
-        if summary:
-            short = summary.strip()
-        elif last_text:
-            # LLM unavailable AND Claude wrote text — fall back to the
-            # first line + ellipsis to avoid the "✅ No coding activity"
-            # garbage we used to post.
-            first_line = last_text.splitlines()[0].strip()
-            short = (
-                first_line
-                if len(first_line) <= _MAX_INLINE_TEXT_CHARS
-                else (first_line[: _MAX_INLINE_TEXT_CHARS - 1].rstrip() + "…")
-            )
-        else:
-            short = "✅ Done."
+        short = "✅ Done."
 
     if len(short) > _MAX_INLINE_TEXT_CHARS:
         short = short[: _MAX_INLINE_TEXT_CHARS - 1].rstrip() + "…"
+    if not short:
+        short = "✅ Done."
 
     # Lazy: config is the source of bot_token + miniapp settings.
     from ccgram.config import config
@@ -361,6 +287,10 @@ async def _handle_stop_summary(event: Any, client: Any) -> None:
         window_id=window_id, bot_token=config.telegram_bot_token
     )
 
+    # The ⚙️ Settings button drives Claude-specific levers (/model, /effort,
+    # plan mode); only attach it for Claude windows.
+    settings_window = window_id if view.provider_name == "claude" else None
+
     for _user_id, thread_id, chat_id in bindings:
         await _post_summary_message(
             client=client,
@@ -369,6 +299,7 @@ async def _handle_stop_summary(event: Any, client: Any) -> None:
             summary=short,
             link_url=link,
             diff_url=diff_link,
+            window_id=settings_window,
         )
 
 

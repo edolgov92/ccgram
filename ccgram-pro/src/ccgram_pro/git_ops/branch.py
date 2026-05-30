@@ -5,7 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from ._run import run_git
+from ._run import GitOpError, run_git
+
+
+class PushRejected(RuntimeError):  # noqa: N818 -- a rejected push, not an "Error"
+    """A push was rejected (non-fast-forward / remote ahead). Never force-pushed."""
 
 
 @dataclass(frozen=True)
@@ -43,16 +47,36 @@ def list_branches(repo: Path | str) -> list[BranchInfo]:
     return branches
 
 
+def checkout(repo: Path | str, ref: str) -> None:
+    """Check out an existing ref (branch/commit) in *repo*."""
+    run_git(repo, "checkout", ref)
+
+
 def create_branch(
     repo: Path | str, name: str, *, from_ref: str = "HEAD", checkout: bool = True
 ) -> None:
     """Create *name* off *from_ref*, optionally checking it out."""
-    if not name or "/" in name and ".." in name:
+    if (
+        not name
+        or ".." in name
+        or name.startswith("/")
+        or name.endswith("/")
+        or any(c.isspace() for c in name)
+    ):
         raise ValueError(f"unsafe branch name: {name!r}")
     if checkout:
         run_git(repo, "checkout", "-b", name, from_ref)
     else:
         run_git(repo, "branch", name, from_ref)
+
+
+_REJECTED_MARKERS = (
+    "non-fast-forward",
+    "fetch first",
+    "rejected",
+    "tip of your current branch is behind",
+    "updates were rejected",
+)
 
 
 def push_branch(
@@ -62,11 +86,24 @@ def push_branch(
     set_upstream: bool = True,
     remote: str = "origin",
 ) -> str:
-    """Push (and optionally set-upstream) the branch. Returns ``git push`` stdout."""
+    """Push (and optionally set-upstream) the branch. Returns ``git push`` stdout.
+
+    Classifies a rejected / non-fast-forward push as :class:`PushRejected`
+    (the remote has commits the local branch doesn't) instead of a generic
+    error. Never force-pushes.
+    """
     args: list[str] = ["push"]
     if set_upstream:
         args.extend(["--set-upstream", remote, branch or current_branch(repo)])
-    else:
-        if branch:
-            args.extend([remote, branch])
-    return run_git(repo, *args, timeout=60).stdout
+    elif branch:
+        args.extend([remote, branch])
+    result = run_git(repo, *args, timeout=60, check=False)
+    if result.returncode == 0:
+        return result.stdout
+    blob = f"{result.stdout}\n{result.stderr}".lower()
+    if any(marker in blob for marker in _REJECTED_MARKERS):
+        raise PushRejected(
+            "Push rejected — the remote has commits you don't have locally. "
+            "Pull/rebase first (no force-push)."
+        )
+    raise GitOpError(["git", "push", *args], result.returncode, result.stderr)
