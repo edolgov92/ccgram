@@ -56,6 +56,20 @@ def make_share_url(
     return f"{base.rstrip('/')}/view/{token}"
 
 
+def make_plan_url(
+    *,
+    bot_token: str,
+    share_id: str,
+    ttl: int = DEFAULT_SHARE_TTL_SECONDS,
+) -> str | None:
+    """Mint a share token and build the ``/plan`` URL (full plan markdown page)."""
+    base = _miniapp_base_url()
+    if not base:
+        return None
+    token = sign_share_token(bot_token=bot_token, share_id=share_id, ttl=ttl)
+    return f"{base.rstrip('/')}/plan/{token}"
+
+
 def make_compose_url(*, bot_token: str, window_id: str) -> str | None:
     """Mint a short-lived compose token, build the ``/compose`` URL.
 
@@ -79,6 +93,7 @@ __all__ = [
     "DEFAULT_SHARE_TTL_SECONDS",
     "InvalidShareToken",
     "make_compose_url",
+    "make_plan_url",
     "make_share_url",
     "resolve_token",
 ]

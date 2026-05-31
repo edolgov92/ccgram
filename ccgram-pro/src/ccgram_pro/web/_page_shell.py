@@ -41,15 +41,21 @@ _CSS = """
 """
 
 
-def render_page(*, title: str, body_html: str, footer: str = "ccgram-pro") -> str:
-    """Return a full dark HTML page. *body_html* must already be escaped."""
+def render_page(
+    *, title: str, body_html: str, footer: str = "ccgram-pro", extra_css: str = ""
+) -> str:
+    """Return a full dark HTML page. *body_html* must already be escaped.
+
+    *extra_css* is appended verbatim to the page ``<style>`` so callers can pull
+    in component CSS (e.g. ``transcript_css()``) without a second ``<style>``.
+    """
     return (
         '<!doctype html>\n<html lang="en">\n<head>\n'
         '<meta charset="utf-8">\n'
         '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">\n'
         '<meta name="color-scheme" content="dark light">\n'
         f"<title>{html.escape(title)}</title>\n"
-        f"<style>{_CSS}</style>\n</head>\n<body>\n<main>\n"
+        f"<style>{_CSS}{extra_css}</style>\n</head>\n<body>\n<main>\n"
         f"{body_html}\n"
         f"<footer>{html.escape(footer)}</footer>\n"
         "</main>\n</body>\n</html>\n"

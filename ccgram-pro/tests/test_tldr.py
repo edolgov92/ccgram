@@ -45,3 +45,34 @@ def test_strip_handles_multiple_blocks() -> None:
 def test_system_prompt_contains_both_markers() -> None:
     assert tldr.TLDR_OPEN in tldr.TLDR_SYSTEM_PROMPT
     assert tldr.TLDR_CLOSE in tldr.TLDR_SYSTEM_PROMPT
+
+
+def test_extract_progress_lines_in_order() -> None:
+    text = (
+        f"intro {tldr.PROGRESS_OPEN}First step{tldr.PROGRESS_CLOSE} mid "
+        f"{tldr.PROGRESS_OPEN}Second step{tldr.PROGRESS_CLOSE} end"
+    )
+    assert tldr.extract_progress_lines(text) == ["First step", "Second step"]
+
+
+def test_extract_progress_lines_skips_empty() -> None:
+    text = f"{tldr.PROGRESS_OPEN}   {tldr.PROGRESS_CLOSE}"
+    assert tldr.extract_progress_lines(text) == []
+
+
+def test_strip_progress_removes_blocks() -> None:
+    text = f"body {tldr.PROGRESS_OPEN}note{tldr.PROGRESS_CLOSE}"
+    stripped = tldr.strip_progress(text)
+    assert "note" not in stripped
+    assert tldr.PROGRESS_OPEN not in stripped
+    assert "body" in stripped
+
+
+def test_launch_prompt_combines_tldr_and_progress() -> None:
+    assert tldr.TLDR_OPEN in tldr.LAUNCH_SYSTEM_PROMPT
+    assert tldr.PROGRESS_OPEN in tldr.LAUNCH_SYSTEM_PROMPT
+
+
+def test_progress_system_prompt_has_markers() -> None:
+    assert tldr.PROGRESS_OPEN in tldr.PROGRESS_SYSTEM_PROMPT
+    assert tldr.PROGRESS_CLOSE in tldr.PROGRESS_SYSTEM_PROMPT

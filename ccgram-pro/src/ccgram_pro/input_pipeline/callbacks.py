@@ -109,8 +109,8 @@ async def _do_flush(
     # reaction; Claude's reply follows.
     await _delete_status(query, user_id, thread_id)
 
-    # Optionally kick off the live "🔧 Working…" bubble. Off by default —
-    # the ack reaction is the heartbeat; the bubble reads as spam.
+    # Kick off the live "⚙️ Working on your request…" bubble (on by default) so
+    # the user sees Claude's progress notes grow until the final summary posts.
     # Lazy: deferred to avoid a heavy/cyclic import at module load.
     from ..config import load_settings
 
@@ -124,6 +124,7 @@ async def _do_flush(
             bot=context.bot,
             chat_id=chat_id,
             thread_id=thread_id,
+            transcript_path=intercept._resolve_transcript_path(window_id),
         )
 
 

@@ -81,11 +81,22 @@ async def _edit_or_send_status(
     window_id: str,
     count: int,
 ) -> None:
-    """Send (or in-place edit) the persistent batch-status reply.
+    """Repost the batch-status reply so it always sits below the newest message.
 
-    Lives on this layer's :data:`_status_messages` dict — independent of
-    ccgram's status bubble (which is silenced) so we never collide.
+    Rather than editing the existing status in place (which would leave it
+    stranded above any messages the user sent since), we send a fresh status
+    message and then delete the previous one — so the "📝 N batched — tap Send"
+    prompt follows the conversation to the bottom. Ordering matters: we send
+    first and only delete the prior on success, so a failed send never orphans
+    the batch (the old prompt with its working buttons stays put).
+
+    Serialized per-window via :func:`state.transaction` so two messages arriving
+    back-to-back can't each repost and leave one orphaned. Lives on this layer's
+    :data:`_status_messages` dict — independent of ccgram's silenced bubble.
     """
+    # Lazy: only needed on this path.
+    import contextlib
+
     # Lazy: PTB types only needed on the handler/send path.
     from telegram.constants import ParseMode
 
@@ -93,34 +104,27 @@ async def _edit_or_send_status(
     from telegram.error import TelegramError
 
     key = (user_id, thread_id)
-    msg_id = _status_messages.get(key)
     text = _status_text(count)
     keyboard = _status_keyboard(window_id)
-    if msg_id is not None:
+    async with state.transaction(window_id):
+        prev_id = _status_messages.get(key)
         try:
-            await bot.edit_message_text(
+            sent = await bot.send_message(
                 chat_id=chat_id,
-                message_id=msg_id,
+                message_thread_id=thread_id,
                 text=text,
                 reply_markup=keyboard,
                 parse_mode=ParseMode.MARKDOWN,
+                disable_notification=True,
             )
-            return
         except TelegramError as exc:
-            logger.debug("status edit fell through to fresh send: %s", exc)
-            _status_messages.pop(key, None)
-    try:
-        sent = await bot.send_message(
-            chat_id=chat_id,
-            message_thread_id=thread_id,
-            text=text,
-            reply_markup=keyboard,
-            parse_mode=ParseMode.MARKDOWN,
-            disable_notification=True,
-        )
+            # Keep prev_id so the existing prompt (and its Send button) survives.
+            logger.warning("could not post batch status: %s", exc)
+            return
         _status_messages[key] = sent.message_id
-    except TelegramError as exc:
-        logger.warning("could not post batch status: %s", exc)
+        if prev_id is not None and prev_id != sent.message_id:
+            with contextlib.suppress(TelegramError):
+                await bot.delete_message(chat_id=chat_id, message_id=prev_id)
 
 
 def clear_status_message(user_id: int, thread_id: int) -> int | None:
@@ -135,6 +139,24 @@ def clear_status_message(user_id: int, thread_id: int) -> int | None:
 # ── Patches ────────────────────────────────────────────────────────────
 
 
+def _resolve_transcript_path(window_id: str) -> str | None:
+    """Resolve the window's live transcript path (for progress-bubble tailing).
+
+    Returns ``None`` if the window/store isn't resolvable (e.g. the query layer
+    isn't wired yet); the progress bubble simply tails nothing in that case.
+    """
+    # Lazy: window_query pulls in the query layer.
+    from ccgram.window_query import view_window
+
+    try:
+        view = view_window(window_id)
+    except RuntimeError:
+        return None
+    if view and view.transcript_path:
+        return str(view.transcript_path)
+    return None
+
+
 async def _touch_workspace_activity(window_id: str) -> None:
     """Refresh ``last_activity_at`` for windows backed by a per-session clone."""
     # Lazy: deferred to avoid a heavy/cyclic import at module load.
@@ -142,6 +164,11 @@ async def _touch_workspace_activity(window_id: str) -> None:
 
     sidecar = state.load(window_id)
     if sidecar is None or not sidecar.workspace_path:
+        return
+    # Worktrees are not layer-owned, idle-GC'd directories — never stamp them
+    # (the idle sweep keys off last_activity_at; leaving it None keeps the sweep
+    # away from git-registered worktrees).
+    if sidecar.workspace_strategy == "worktree":
         return
     # Lazy: deferred to avoid a heavy/cyclic import at module load.
     from ..workspaces.manager import touch_activity
@@ -160,9 +187,10 @@ async def _wrapped_forward_message(
     """Replacement for ``text_handler._forward_message``.
 
     Falls through to the original on non-batched windows so the upstream
-    behaviour (typing action, ack reaction, command history) stays
-    intact. After a direct (non-batched) forward, the progress bubble
-    is started so the user sees "🔧 Working…" until Claude completes.
+    behaviour (typing action, command history) stays intact. After a direct
+    (non-batched) forward, the progress bubble is started so the user sees
+    "⚙️ Working on your request…" growing with Claude's progress notes until
+    the turn completes.
     """
     # A user message is the clearest "session is alive" signal — refresh the
     # workspace activity timestamp so the idle GC doesn't reap an actively-used
@@ -191,13 +219,12 @@ async def _wrapped_forward_message(
                     bot=bot,
                     chat_id=message.chat.id,
                     thread_id=thread_id,
+                    transcript_path=_resolve_transcript_path(window_id),
                 )
         return
-    # Lazy: ack_reaction is exported from message_sender, not reactions
-    # (the helper composes config.ack_reaction with set_message_reaction).
-    from ccgram.handlers.messaging_pipeline.message_sender import ack_reaction
-
-    await ack_reaction(client, message.chat.id, message.message_id)
+    # No ack reaction on the user's batched message — the layer keeps the chat
+    # free of bot-authored emoji (see silencer reactions suppression). The batch
+    # status bubble is the acknowledgement that the message was queued.
     total, _idx = await __import__(
         "ccgram_pro.input_pipeline.batcher", fromlist=["enqueue"]
     ).enqueue(window_id, kind="text", body=text)
@@ -256,6 +283,16 @@ async def _wrapped_voice_send(
     total, _ = await __import__(
         "ccgram_pro.input_pipeline.batcher", fromlist=["enqueue"]
     ).enqueue(window_id, kind="voice", body=pending_text)
+    # The transcript is now in the batch — strip the card's actions so it reads
+    # as a plain "🎤 Transcribed: …" record (the batch status tracks it).
+    # Lazy: only needed on this path.
+    import contextlib
+
+    # Lazy: PTB error type only needed here.
+    from telegram.error import TelegramError
+
+    with contextlib.suppress(TelegramError):
+        await query.edit_message_reply_markup(reply_markup=None)
     bot = msg.get_bot()
     await _edit_or_send_status(
         bot=bot,
@@ -268,9 +305,35 @@ async def _wrapped_voice_send(
     await query.answer("Batched")
 
 
+async def _wrapped_transcribe_audio(
+    message: Any, transcriber: Any, audio_bytes: bytes
+) -> Any:
+    """Replacement for ``voice_handler._transcribe_audio`` — adds LLM cleanup.
+
+    Runs the raw Whisper result through :func:`voice_cleanup.clean_transcript`
+    so IT homophones (modal↔model, messages↔messengers, …) are corrected before
+    the user sees the confirm card. Falls back to the raw result on any failure
+    (no LLM configured, timeout, error) and preserves the detected language.
+    """
+    result = await _ORIGINAL_TRANSCRIBE_AUDIO(message, transcriber, audio_bytes)
+    if result is None:
+        return result
+    # Lazy: voice_cleanup pulls the llm client; only needed on the voice path.
+    from .voice_cleanup import clean_transcript
+
+    cleaned = await clean_transcript(result.text)
+    if cleaned == result.text:
+        return result
+    # Lazy: ccgram internal — deferred to avoid an import cycle at module load.
+    from ccgram.whisper.base import TranscriptionResult
+
+    return TranscriptionResult(text=cleaned, language=result.language)
+
+
 # Captured once during install_input_pipeline().
 _ORIGINAL_FORWARD_MESSAGE: Any = None
 _ORIGINAL_VOICE_SEND: Any = None
+_ORIGINAL_TRANSCRIBE_AUDIO: Any = None
 
 
 def install_input_pipeline(application: "Application") -> None:
@@ -278,6 +341,7 @@ def install_input_pipeline(application: "Application") -> None:
     callback handler on *application*.
     """
     global _installed, _ORIGINAL_FORWARD_MESSAGE, _ORIGINAL_VOICE_SEND
+    global _ORIGINAL_TRANSCRIBE_AUDIO
     if _installed:
         return
 
@@ -287,15 +351,26 @@ def install_input_pipeline(application: "Application") -> None:
     # Lazy: ccgram internal — deferred to avoid an import cycle with ccgram bootstrap (the layer is imported during bootstrap).
     from ccgram.handlers.voice import voice_callbacks as voice_callbacks_mod
 
+    # Lazy: ccgram internal — deferred to avoid an import cycle with ccgram bootstrap (the layer is imported during bootstrap).
+    from ccgram.handlers.voice import voice_handler as voice_handler_mod
+
     _ORIGINAL_FORWARD_MESSAGE = text_handler_mod._forward_message
     _ORIGINAL_VOICE_SEND = voice_callbacks_mod._handle_send
+    _ORIGINAL_TRANSCRIBE_AUDIO = voice_handler_mod._transcribe_audio
 
     text_handler_mod._forward_message = _wrapped_forward_message  # type: ignore[assignment]
     voice_callbacks_mod._handle_send = _wrapped_voice_send  # type: ignore[assignment]
+    # Clean raw transcripts (IT homophones) before the confirm card renders.
+    voice_handler_mod._transcribe_audio = _wrapped_transcribe_audio  # type: ignore[assignment]
+    # Relabel the confirm button (➕ Add to batch) + add the ✏️ Edit button.
+    # Lazy: deferred to avoid a heavy/cyclic import at module load.
+    from . import voice_edit
 
-    # Register the Send / Clear callback handler.
+    voice_handler_mod._build_voice_keyboard = voice_edit.build_voice_keyboard  # type: ignore[assignment]
+
+    # Register the Send / Clear + voice-edit callback handlers.
     # Lazy: PTB types only needed on the handler/send path.
-    from telegram.ext import CallbackQueryHandler
+    from telegram.ext import CallbackQueryHandler, MessageHandler, filters
 
     # Lazy: deferred to avoid a heavy/cyclic import at module load.
     from .callbacks import handle_batch_callback
@@ -304,6 +379,20 @@ def install_input_pipeline(application: "Application") -> None:
     application.add_handler(
         CallbackQueryHandler(handle_batch_callback, pattern=r"^ccgrampro:batch:"),
         group=-10,
+    )
+    application.add_handler(
+        CallbackQueryHandler(
+            voice_edit.handle_voice_edit_callback, pattern=r"^ccgrampro:ve:"
+        ),
+        group=-10,
+    )
+    # group=-11: consume a voice-edit reply before ccgram's text handler (group 0)
+    # forwards it to the agent. No-op pass-through when no edit is armed.
+    application.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND, voice_edit.consume_voice_edit_reply
+        ),
+        group=-11,
     )
 
     _installed = True

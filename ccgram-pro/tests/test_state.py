@@ -283,3 +283,65 @@ async def test_update_locked_persists_change() -> None:
     assert loaded is not None
     assert loaded.mode == "plan"
     assert loaded.reasoning == "max"
+
+
+def test_last_summary_messages_round_trip() -> None:
+    sidecar = state.WindowSidecar(window_id="@s", window_creation_epoch=0.0)
+    sidecar.last_summary_messages = [
+        {"chat_id": -100, "thread_id": 7, "message_id": 42},
+    ]
+    sidecar.source_repo_path = "/repo"
+    state.save(sidecar)
+    loaded = state.load("@s")
+    assert loaded is not None
+    assert loaded.last_summary_messages == [
+        {"chat_id": -100, "thread_id": 7, "message_id": 42}
+    ]
+    assert loaded.source_repo_path == "/repo"
+
+
+def test_deserialize_skips_malformed_summary_entries() -> None:
+    path = state._sidecar_path("@bad")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "window_id": "@bad",
+                "window_creation_epoch": 0.0,
+                "last_summary_messages": [
+                    {"chat_id": 1, "thread_id": 2, "message_id": 3},
+                    {"chat_id": 1},
+                    "garbage",
+                ],
+            }
+        )
+    )
+    loaded = state.load("@bad")
+    assert loaded is not None
+    assert loaded.last_summary_messages == [
+        {"chat_id": 1, "thread_id": 2, "message_id": 3}
+    ]
+
+
+def test_progress_bubble_round_trips_chat_id() -> None:
+    sidecar = state.WindowSidecar(window_id="@b", window_creation_epoch=0.0)
+    sidecar.current_progress_bubble = {
+        "thread_id": 5,
+        "message_id": 9,
+        "chat_id": -42,
+    }
+    state.save(sidecar)
+    loaded = state.load("@b")
+    assert loaded is not None
+    assert loaded.current_progress_bubble == {
+        "thread_id": 5,
+        "message_id": 9,
+        "chat_id": -42,
+    }
+
+
+def test_resolve_repo_prefers_workspace_path() -> None:
+    sidecar = state.WindowSidecar(window_id="@r", window_creation_epoch=0.0)
+    sidecar.workspace_path = "/clone/here"
+    state.save(sidecar)
+    assert state.resolve_repo("@r") == "/clone/here"

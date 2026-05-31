@@ -145,10 +145,11 @@ def _wrapped_resolve(original: Any) -> Any:
         command = original(provider_name, **kwargs)
         if provider_name != "claude":
             return command
-        # The TL;DR contract is appended for every Claude launch so Claude
-        # itself produces the user-facing summary (replacing the LLM hop).
+        # The TL;DR + progress contract is appended for every Claude launch so
+        # Claude itself produces the user-facing summary AND the live progress
+        # notes (replacing the LLM hop / hardcoded status text).
         # Lazy: layer module deferred to the call path.
-        from .output_pipeline.tldr import TLDR_SYSTEM_PROMPT
+        from .output_pipeline.tldr import LAUNCH_SYSTEM_PROMPT
 
         if _override_model:
             command = _apply_overrides(
@@ -156,11 +157,11 @@ def _wrapped_resolve(original: Any) -> Any:
                 _override_model,
                 _override_effort or "",
                 plan=_override_plan,
-                append_system_prompt=TLDR_SYSTEM_PROMPT,
+                append_system_prompt=LAUNCH_SYSTEM_PROMPT,
             )
-        elif TLDR_SYSTEM_PROMPT not in command:
+        elif LAUNCH_SYSTEM_PROMPT not in command:
             command = (
-                f"{command} --append-system-prompt {shlex.quote(TLDR_SYSTEM_PROMPT)}"
+                f"{command} --append-system-prompt {shlex.quote(LAUNCH_SYSTEM_PROMPT)}"
             )
         return command
 
@@ -652,7 +653,27 @@ async def _handle_start(
         _override_effort = None
         _override_plan = False
 
-    await _finalize_start(user_id, session, clone_dest, worktree_dest, repo)
+    created_wid = await _finalize_start(
+        user_id, session, clone_dest, worktree_dest, repo
+    )
+    if created_wid is not None:
+        # Bound successfully — delete the picker card instead of leaving
+        # ccgram's "✅ … Bound to this topic. Send messages here." text. The
+        # layer keeps the chat free of system notifications. On bind failure
+        # (created_wid is None) ccgram already edited the card with an error,
+        # so we leave it in place.
+        await _delete_picker(query)
+
+
+async def _delete_picker(query: Any) -> None:
+    # Lazy: only needed in this branch.
+    import contextlib
+
+    # Lazy: PTB types only needed on the handler/send path.
+    from telegram.error import TelegramError
+
+    with contextlib.suppress(TelegramError):
+        await query.delete_message()
 
 
 def _resolve_provider_and_mode(session: store.PendingSession) -> tuple[str, str]:
@@ -673,12 +694,13 @@ async def _finalize_start(
     clone_dest: Path | None,
     worktree_dest: Path | None,
     repo: Path,
-) -> None:
+) -> str | None:
     """Resolve the created window, persist the sidecar, and clear the store.
 
-    If no window got bound (creation failed — ccgram already edited the card
-    with an error), clean up whatever we provisioned (clone dir or worktree)
-    and drop the store entry so the next message re-shows the picker.
+    Returns the bound window id, or ``None`` if no window got bound (creation
+    failed — ccgram already edited the card with an error). On failure, clean up
+    whatever we provisioned (clone dir or worktree) and drop the store entry so
+    the next message re-shows the picker.
     """
     # Lazy: ccgram internal — deferred to avoid a bootstrap import cycle.
     from ccgram.thread_router import thread_router
@@ -690,7 +712,7 @@ async def _finalize_start(
         if worktree_dest is not None:
             await _cleanup_worktree(repo, worktree_dest)
         store.clear(session.chat_id, session.thread_id)
-        return
+        return None
 
     async with state.transaction(created_wid):
         sidecar = state.get_or_create(created_wid)
@@ -701,13 +723,24 @@ async def _finalize_start(
         sidecar.workspace_strategy = session.workspace_strategy
         sidecar.base_branch = session.base_branch
         sidecar.plan_mode = "entered" if session.mode == "plan" else "skipped"
+        # Record the source repo so teardown can run git worktree-remove / drop
+        # snapshot refs against the right repository for clone/worktree sessions.
+        if session.workspace_strategy in ("clone", "worktree"):
+            sidecar.source_repo_path = str(repo)
         if clone_dest is not None:
             sidecar.workspace_path = str(clone_dest)
             # Stamp activity now so the idle GC sweep doesn't reap a workspace
             # that was just provisioned (it keys off last_activity_at).
             sidecar.last_activity_at = time.time()
+        elif worktree_dest is not None:
+            # Worktree path is the window cwd; persist it for teardown. NOTE:
+            # teardown removes it via ``git worktree remove`` (never rmtree), and
+            # the idle GC's rmtree path is keyed off ``last_activity_at`` which we
+            # deliberately leave unset for worktrees so the sweep skips them.
+            sidecar.workspace_path = str(worktree_dest)
         state.save(sidecar)
     store.clear(session.chat_id, session.thread_id)
+    await _capture_session_anchor(created_wid)
     logger.info(
         "new-session started: window=%s project=%s mode=%s workspace=%s base=%s",
         created_wid,
@@ -716,6 +749,36 @@ async def _finalize_start(
         session.workspace_strategy,
         session.base_branch or "(current)",
     )
+    return created_wid
+
+
+async def _capture_session_anchor(window_id: str) -> None:
+    """Freeze the pristine session-start tree as diff snapshot iteration 0.
+
+    Best-effort: a non-git workspace simply skips (no diff feature). Runs the git
+    subprocesses off the event loop, serialized with the per-window lock.
+    """
+    # Lazy: only needed in this branch.
+    import asyncio
+
+    # Lazy: layer module deferred to the call path.
+    from .git_ops import GitOpError, capture_snapshot
+
+    repo = state.resolve_repo(window_id)
+    if not repo:
+        return
+    try:
+        async with state.transaction(window_id):
+            entry = await asyncio.to_thread(
+                capture_snapshot, window_id=window_id, project_root=repo
+            )
+            sidecar = state.load(window_id)
+            if sidecar is not None:
+                sidecar.session_anchor_sha = entry.commit_sha
+                sidecar.last_snapshot_id = entry.commit_sha
+                state.save(sidecar)
+    except (GitOpError, ValueError) as exc:
+        logger.debug("session anchor capture failed for %s: %s", window_id, exc)
 
 
 class _StartError(RuntimeError):

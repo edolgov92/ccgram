@@ -36,12 +36,16 @@ class _Query:
         )
         self.answers: list[Any] = []
         self.edits: list[str] = []
+        self.deleted = False
 
     async def answer(self, *a: Any, **k: Any) -> None:
         self.answers.append((a, k))
 
     async def edit_message_text(self, *a: Any, **k: Any) -> None:
         self.edits.append(k.get("text", a[0] if a else ""))
+
+    async def delete_message(self, *a: Any, **k: Any) -> None:
+        self.deleted = True
 
 
 def _ctx() -> Any:
@@ -163,3 +167,47 @@ async def test_window_id_resolved_from_binding(projects_toml, monkeypatch) -> No
     await new_session._handle_start(_Query(), _update(), _ctx(), s)
     # sidecar written for the binding-resolved id, NOT a guessed last window
     assert state.load("@thread-bound") is not None
+
+
+async def test_start_deletes_picker_message_on_success(
+    projects_toml, monkeypatch
+) -> None:
+    _capture_cwb(monkeypatch)
+    _bind_wid(monkeypatch, "@7")
+    s = store.create(10, 2, 7, "hello", default_mode="coding")
+    q = _Query()
+    await new_session._handle_start(q, _update(), _ctx(), s)
+    assert q.deleted is True
+
+
+async def test_start_keeps_card_on_bind_failure(projects_toml, monkeypatch) -> None:
+    _capture_cwb(monkeypatch)
+    _bind_wid(monkeypatch, None)
+    s = store.create(10, 2, 7, "hello", default_mode="coding")
+    q = _Query()
+    await new_session._handle_start(q, _update(), _ctx(), s)
+    assert q.deleted is False
+    assert store.get(10, 2) is None
+
+
+async def test_worktree_persists_path_and_source_repo(
+    projects_toml, monkeypatch
+) -> None:
+    captured = _capture_cwb(monkeypatch)
+    _bind_wid(monkeypatch, "@7")
+
+    async def stub_provision_worktree(session, project, repo):  # noqa: ARG001
+        from pathlib import Path
+
+        return Path(str(projects_toml) + ".worktrees/feature")
+
+    monkeypatch.setattr(new_session, "_provision_cwd", stub_provision_worktree)
+    s = store.create(10, 2, 7, "hello", default_mode="coding")
+    s.workspace_strategy = "worktree"
+    await new_session._handle_start(_Query(), _update(), _ctx(), s)
+    sidecar = state.load("@7")
+    assert sidecar is not None
+    assert sidecar.workspace_strategy == "worktree"
+    assert sidecar.workspace_path == captured["cwd"]
+    assert sidecar.source_repo_path == str(projects_toml)
+    assert sidecar.last_activity_at is None

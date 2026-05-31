@@ -40,6 +40,46 @@ TLDR_SYSTEM_PROMPT = (
 )
 
 
+PROGRESS_OPEN = "<!--ccgram:progress-->"
+PROGRESS_CLOSE = "<!--/ccgram:progress-->"
+
+_PROGRESS_RE = re.compile(
+    re.escape(PROGRESS_OPEN) + r"(.*?)" + re.escape(PROGRESS_CLOSE), re.DOTALL
+)
+
+PROGRESS_SYSTEM_PROMPT = (
+    "While working through a longer task, narrate your progress for someone "
+    "watching on their phone: as you START each distinct step, emit a single "
+    "short line (≈3-8 words, ideally under 80 characters) wrapped EXACTLY in "
+    f"these markers on their own line:\n{PROGRESS_OPEN}Reading the auth module"
+    f"{PROGRESS_CLOSE}\n"
+    "Examples: 'Mapping the data flow', 'Editing the login handler', 'Running "
+    "the test suite', 'Investigating the failure'. Emit one as you begin each "
+    "step — they are invisible in the rendered message and used only to drive a "
+    "live progress indicator. Skip them for trivial, single-step replies."
+)
+
+# Appended verbatim to every Claude launch so Claude itself produces both the
+# user-facing TL;DR and the live progress notes. Claude concatenates multiple
+# ``--append-system-prompt`` tokens, so passing the two combined is equivalent
+# to passing them separately — we combine for a single, tidy flag.
+LAUNCH_SYSTEM_PROMPT = f"{TLDR_SYSTEM_PROMPT}\n\n{PROGRESS_SYSTEM_PROMPT}"
+
+
+def extract_progress_lines(text: str) -> list[str]:
+    """Return every progress note (markers stripped) from *text*, in order.
+
+    Whitespace-only matches are dropped. Used by the live progress bubble to
+    grow its bulleted list as Claude narrates each step.
+    """
+    return [m.strip() for m in _PROGRESS_RE.findall(text) if m.strip()]
+
+
+def strip_progress(text: str) -> str:
+    """Remove every progress-note block from *text* (chat + web never show them)."""
+    return _PROGRESS_RE.sub("", text).rstrip()
+
+
 def extract_tldr(text: str) -> str | None:
     """Return the TL;DR body (markers stripped) from *text*, or None.
 

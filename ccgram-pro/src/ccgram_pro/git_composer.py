@@ -35,14 +35,7 @@ def _one_line(exc: Exception) -> str:
 
 
 def _resolve_repo(window_id: str) -> str | None:
-    # Lazy: ccgram internal — deferred to avoid a bootstrap import cycle.
-    from ccgram.window_query import view_window
-
-    sidecar = state.load(window_id)
-    if sidecar and sidecar.workspace_path:
-        return sidecar.workspace_path
-    view = view_window(window_id)
-    return view.cwd if view and view.cwd else None
+    return state.resolve_repo(window_id)
 
 
 def _topic(update: Any) -> tuple[int, int]:

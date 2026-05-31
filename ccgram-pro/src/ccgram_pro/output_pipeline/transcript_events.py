@@ -150,13 +150,13 @@ def _role_kind(role: str) -> str:
 
 
 def _clean_text(text: str, kind: str) -> str:
-    """Strip the Telegram-only TL;DR block from assistant text for the web view."""
+    """Strip Telegram-only markers (TL;DR + progress notes) from assistant text."""
     if kind != "assistant":
         return text
     # Lazy: tldr is a pure-stdlib layer module.
-    from .tldr import strip_tldr
+    from .tldr import strip_progress, strip_tldr
 
-    return strip_tldr(text)
+    return strip_progress(strip_tldr(text))
 
 
 def events_to_dicts(events: list[TurnEvent]) -> list[dict]:

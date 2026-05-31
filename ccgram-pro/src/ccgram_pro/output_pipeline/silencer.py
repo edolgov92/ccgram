@@ -176,6 +176,39 @@ def _typing_silent(
     return _is_silent_for_thread(thread_id)
 
 
+def _reactions_disabled(*_args: Any, **_kwargs: Any) -> bool:
+    """Skip-predicate: suppress when the operator has reactions turned off.
+
+    Default is off (``Defaults.reactions_enabled = False``) — the layer adds no
+    emoji to the user's own messages (no 👀 ack, no voice receipt). This is a
+    global switch, not per-window: a reaction call only has ``(chat_id,
+    message_id)``, which isn't enough to resolve a window.
+    """
+    return not load_settings().defaults.reactions_enabled
+
+
+def _wrap_react(name: str, original: Callable[..., Any]) -> Callable[..., Any]:
+    """Wrap ``react`` so a suppressed call returns ``True`` (looks successful).
+
+    Unlike the fire-and-forget surfaces, ``react`` returns a bool some callers
+    branch on (to fall back to a toast). A skipped reaction must read as success
+    so those callers proceed normally rather than triggering a failure path.
+    """
+
+    async def wrapper(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+        try:
+            if _reactions_disabled():
+                return True
+        except Exception:  # noqa: BLE001 -- silencer must never abort the host
+            logger.exception("silencer guard for %s raised; falling through", name)
+        return await original(*args, **kwargs)
+
+    wrapper.__name__ = f"silenced_{name}"
+    wrapper.__qualname__ = wrapper.__name__
+    wrapper.__wrapped__ = original  # type: ignore[attr-defined]
+    return wrapper
+
+
 def _is_silent_for_session(session_id: str) -> bool:
     """Resolve session_id → window_id → sidecar.silent_mode."""
     # Lazy: session_query indirectly pulls in session_manager and the
@@ -259,12 +292,15 @@ def install_silencer() -> None:
         & _install_status_bubble()
         & _install_typing()
         & _install_new_message_echo()
+        & _install_ack_reaction()
+        & _install_reactions()
     )
 
     _installed = True
     logger.info(
         "ccgram-pro silencer installed%s — silent_mode topics suppress topic "
-        "emoji, status bubble, typing indicator, and user/thinking echo",
+        "emoji, status bubble, typing indicator, user/thinking echo, and "
+        "(when reactions disabled) all bot reactions on user messages",
         "" if ok else " (with degraded patches; see warnings)",
     )
 
@@ -400,6 +436,83 @@ def _install_new_message_echo() -> bool:
         return True
     except ImportError, AttributeError:
         logger.warning("silencer: new-message-echo patch skipped", exc_info=True)
+        return False
+
+
+def _install_ack_reaction() -> bool:
+    # ``ack_reaction`` adds the configured emoji (👀 in prod) to the user's own
+    # message after forwarding. Suppress it globally when reactions are off.
+    try:
+        # Lazy: ccgram internal — deferred to avoid a bootstrap import cycle.
+        from ccgram.handlers import file_handler as file_handler_mod
+
+        # Lazy: ccgram internal — deferred to avoid a bootstrap import cycle.
+        from ccgram.handlers.messaging_pipeline import (
+            message_sender as message_sender_mod,
+        )
+
+        # Lazy: ccgram internal — deferred to avoid a bootstrap import cycle.
+        from ccgram.handlers.text import text_handler as text_handler_mod
+
+        # Lazy: ccgram internal — deferred to avoid a bootstrap import cycle.
+        from ccgram.handlers.voice import voice_callbacks as voice_callbacks_mod
+
+        if _already_wrapped(message_sender_mod.ack_reaction):
+            return True
+        wrapped = _wrap_async(
+            "ack_reaction", message_sender_mod.ack_reaction, _reactions_disabled
+        )
+        _patch_importers(
+            "ack_reaction",
+            wrapped,
+            [
+                message_sender_mod,
+                text_handler_mod,
+                file_handler_mod,
+                voice_callbacks_mod,
+            ],
+        )
+        return True
+    except ImportError, AttributeError:
+        logger.warning("silencer: ack-reaction patch skipped", exc_info=True)
+        return False
+
+
+def _install_reactions() -> bool:
+    # ``react`` sets the 👀/🔥/⚡ emoji on the user's voice/shell/command
+    # messages. Patch the canonical ``reactions.react`` (lazy importers resolve
+    # it at call time) plus the module-top importers so none leak through.
+    try:
+        # Lazy: ccgram internal — deferred to avoid a bootstrap import cycle.
+        from ccgram.handlers import reactions as reactions_mod
+
+        # Lazy: ccgram internal — deferred to avoid a bootstrap import cycle.
+        from ccgram.handlers.messaging_pipeline import (
+            message_sender as message_sender_mod,
+        )
+
+        # Lazy: ccgram internal — deferred to avoid a bootstrap import cycle.
+        from ccgram.handlers.send import send_callbacks as send_callbacks_mod
+
+        # Lazy: ccgram internal — deferred to avoid a bootstrap import cycle.
+        from ccgram.handlers.voice import voice_callbacks as voice_callbacks_mod
+
+        if _already_wrapped(reactions_mod.react):
+            return True
+        wrapped = _wrap_react("react", reactions_mod.react)
+        _patch_importers(
+            "react",
+            wrapped,
+            [
+                reactions_mod,
+                message_sender_mod,
+                voice_callbacks_mod,
+                send_callbacks_mod,
+            ],
+        )
+        return True
+    except ImportError, AttributeError:
+        logger.warning("silencer: react patch skipped", exc_info=True)
         return False
 
 

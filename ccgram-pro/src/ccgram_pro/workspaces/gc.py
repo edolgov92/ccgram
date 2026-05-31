@@ -63,6 +63,13 @@ def _sweep_idle(now: float, idle_seconds: int) -> int:
     for sidecar in state.all_sidecars():
         if sidecar.workspace_path is None:
             continue
+        if sidecar.workspace_strategy == "worktree":
+            # A worktree's ``workspace_path`` is a git-registered worktree dir,
+            # NOT a layer-owned clone/copy. Never rmtree it here — teardown
+            # removes it via ``git worktree remove``. (Belt-and-suspenders: we
+            # also never stamp ``last_activity_at`` for worktrees, so this
+            # branch would normally be skipped below anyway.)
+            continue
         if sidecar.last_activity_at is None:
             # Sidecar references a workspace but never recorded activity —
             # treat as orphan-ish, but don't aggressively delete since the

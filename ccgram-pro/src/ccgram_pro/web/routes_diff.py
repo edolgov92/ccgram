@@ -1,14 +1,18 @@
-"""``GET /diff/{token}`` — render a window's diff snapshot as HTML.
+"""``GET /diff/{token}`` — render a window's diff between frozen snapshots.
 
-Toggle ``?anchor=session|iteration`` switches between the two anchors
-the snapshot writer maintains. Defaults to ``iteration`` (= "what
-changed in Claude's last turn") because that's the question the user
-asks most often.
+``?anchor=iteration`` (default) shows ``diff(snap[N-1], snap[N])`` — Claude's
+last turn. ``?anchor=session`` shows ``diff(snap[0], snap[N])`` — everything
+since the session started. Both are computed from immutable snapshot commits so
+they survive commits / pushes / branch switches.
+
+``GET /diff/{token}/expand`` is the JSON companion the page's expander buttons
+call to pull more unchanged context lines from a snapshot's file content.
 """
 
 from __future__ import annotations
 
 import html
+import json
 from typing import TYPE_CHECKING
 
 import structlog
@@ -16,106 +20,62 @@ import structlog
 from ccgram.miniapp.server import _BOT_TOKEN_KEY  # type: ignore[attr-defined]
 
 from ..git_ops.diff import parse_unified_diff
-from ..git_ops.snapshot import SnapshotNotFound, list_snapshots, load_snapshot
+from ..git_ops.snapshot import diff_between, file_content_at, load_index
 from ..share.tokens import InvalidShareToken, verify_share_token
-from .diff_render import diff_page_css, render_diff_html
+from ._page_shell import render_page
+from .diff_render import diff_css, diff_js, render_diff_files
 
 if TYPE_CHECKING:
     from aiohttp import web
 
 logger = structlog.get_logger()
 
-
-_PAGE_TEMPLATE = """\
-<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="color-scheme" content="dark light">
-<title>Diff · {window_id}</title>
-<style>
-  :root {{
-    color-scheme: dark;
-    --bg: #0a0c10;
-    --bg-grad: radial-gradient(1200px 600px at 50% -10%, #141926 0%, #0a0c10 60%);
-    --surface: #12151d;
-    --elevated: #171b25;
-    --fg: #eceef4;
-    --muted: #99a1b3;
-    --faint: #6b7280;
-    --accent: #8aa6ff;
-    --border: #232936;
-    --border-soft: #1b212c;
-    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.22);
-    --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
-            "Helvetica Neue", Arial, "Inter", sans-serif;
-    --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code",
-            Menlo, Consolas, monospace;
-  }}
-  * {{ box-sizing: border-box; }}
-  html {{ -webkit-text-size-adjust: 100%; }}
-  body {{ margin: 0; background: var(--bg); background-image: var(--bg-grad);
-          background-attachment: fixed; color: var(--fg); font-family: var(--font);
-          font-size: 15.5px; line-height: 1.6; -webkit-font-smoothing: antialiased; }}
-  main {{ max-width: 980px; margin: 0 auto; padding: 0 16px 96px; }}
-  header.page {{ position: sticky; top: 0; z-index: 10; margin: 0 -16px 18px;
-            padding: 16px 16px 14px; background: rgba(10,12,16,.72);
-            backdrop-filter: saturate(140%) blur(14px);
-            -webkit-backdrop-filter: saturate(140%) blur(14px);
-            border-bottom: 1px solid var(--border-soft); }}
-  h1 {{ font-size: 1.14rem; font-weight: 650; letter-spacing: -0.01em; margin: 0 0 8px;
-        word-break: break-all;
-        background: linear-gradient(92deg, var(--fg), #c7cede);
-        -webkit-background-clip: text; background-clip: text;
-        -webkit-text-fill-color: transparent; }}
-  .meta {{ display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }}
-  .meta .chip {{ font-size: 0.72rem; color: var(--muted); background: var(--surface);
-                 border: 1px solid var(--border-soft); border-radius: 999px;
-                 padding: 3px 10px; white-space: nowrap; }}
-  .meta .chip code {{ color: var(--accent); font-family: var(--mono); font-size: 0.92em; }}
-  .toggle {{ display: inline-flex; gap: 4px; padding: 4px; background: var(--surface);
-            border: 1px solid var(--border-soft); border-radius: 12px; }}
-  .toggle a {{ padding: 7px 16px; text-decoration: none; color: var(--muted);
-              border-radius: 9px; font-size: 0.82rem; font-weight: 550;
-              transition: background .12s ease, color .12s ease; }}
-  .toggle a:hover {{ color: var(--fg); }}
-  .toggle a.active {{ background: linear-gradient(140deg, #6d8bff, #b69cff);
-                      color: #0b0d12; font-weight: 650; box-shadow: var(--shadow); }}
-  footer {{ margin-top: 44px; padding-top: 18px; border-top: 1px solid var(--border-soft);
-            color: var(--faint); font-size: 0.76rem; text-align: center; }}
-{diff_css}
-</style>
-</head>
-<body>
-<main>
-  <header class="page">
-    <h1>{title}</h1>
-    <div class="meta">{meta_line}</div>
-    <div class="toggle">{toggle_html}</div>
-  </header>
-  <div class="diff">{diff_html}</div>
-  <footer>ccgram-pro · diff snapshot token expires 3 days from issue</footer>
-</main>
-</body>
-</html>
-"""
-
-
 _VALID_ANCHORS = ("iteration", "session")
+_MAX_EXPAND_COUNT = 200
 
 
-def _build_toggle(*, token: str, current: str, available: list[str]) -> str:
+def _anchor_range(latest: int, anchor: str) -> tuple[int, int]:
+    """Map an anchor to ``(base_n, target_n)`` snapshot indices."""
+    if anchor == "session":
+        return 0, latest
+    return max(latest - 1, 0), latest
+
+
+def _toggle_html(*, token: str, current: str) -> str:
     items: list[str] = []
     for anchor in _VALID_ANCHORS:
-        if anchor not in available:
-            continue
         label = "Last iteration" if anchor == "iteration" else "Since session start"
         cls = "active" if anchor == current else ""
         items.append(
             f'<a href="/diff/{html.escape(token)}?anchor={anchor}" class="{cls}">{label}</a>'
         )
-    return "\n".join(items) or "<span></span>"
+    return "".join(items)
+
+
+def _meta_chips(index, target_n: int) -> str:
+    entry = next((e for e in index.entries if e.n == target_n), None)
+    branch = entry.branch if entry else ""
+    head = entry.real_head_sha[:12] if entry and entry.real_head_sha else "—"
+    chips = [
+        f'<span class="chip">🌿 <code>{html.escape(branch or "—")}</code></span>',
+        f'<span class="chip">⎇ <code>{html.escape(head)}</code></span>',
+        f'<span class="chip">📂 <code>{html.escape(index.project_root)}</code></span>',
+    ]
+    return "".join(chips)
+
+
+_TOGGLE_CSS = """
+  .meta { display:flex; flex-wrap:wrap; gap:6px; margin:0 0 12px; }
+  .chip { font-size:0.72rem; color:var(--muted); background:var(--surface);
+          border:1px solid var(--border-soft); border-radius:999px; padding:3px 10px; }
+  .chip code { color:var(--accent); font-family:var(--mono); }
+  .toggle { display:inline-flex; gap:4px; padding:4px; background:var(--surface);
+            border:1px solid var(--border-soft); border-radius:12px; margin-bottom:18px; }
+  .toggle a { padding:7px 16px; text-decoration:none; color:var(--muted);
+              border-radius:9px; font-size:0.82rem; font-weight:550; }
+  .toggle a.active { background:linear-gradient(140deg,#6d8bff,#b69cff);
+              color:#0b0d12; font-weight:650; }
+"""
 
 
 async def _handle_diff(request: "web.Request") -> "web.Response":
@@ -124,65 +84,100 @@ async def _handle_diff(request: "web.Request") -> "web.Response":
 
     token = request.match_info.get("token", "")
     bot_token = request.app[_BOT_TOKEN_KEY]
-
     try:
         payload = verify_share_token(token, bot_token=bot_token)
     except InvalidShareToken as exc:
         logger.debug("diff token rejected: %s", exc)
         return web.Response(status=403, text="invalid or expired link")
 
-    # Token's share_id field reuses the window_id encoding so a single
-    # signer can mint both view-share and diff-share tokens against
-    # the same store. The diff route doesn't touch the share store —
-    # it loads the diff snapshot directly.
     window_id = payload.share_id
+    index = load_index(window_id)
+    if index is None or not index.entries:
+        return web.Response(status=404, text="No diff snapshots for this window yet.")
 
     anchor = request.query.get("anchor", "iteration")
     if anchor not in _VALID_ANCHORS:
         anchor = "iteration"
+    latest = index.entries[-1].n
+    base_n, target_n = _anchor_range(latest, anchor)
 
-    available = list_snapshots(window_id)
-    if not available:
-        return web.Response(
-            status=404,
-            text="No diff snapshots for this window yet.",
-        )
-    if anchor not in available:
-        anchor = available[0]
-
-    try:
-        snapshot = load_snapshot(window_id, anchor)
-    except SnapshotNotFound:
-        return web.Response(status=404, text="snapshot missing")
-
-    files = parse_unified_diff(snapshot.diff_text)
-    diff_html = render_diff_html(
-        files,
-        empty_message=(
-            "No changes since session start."
-            if anchor == "session"
-            else "No changes in Claude's last iteration."
-        ),
+    raw = diff_between(window_id, base_n=base_n, target_n=target_n)
+    files = parse_unified_diff(raw)
+    empty = (
+        "No changes since session start."
+        if anchor == "session"
+        else "No code changes in Claude's last turn — switch to “Since session start”."
     )
-
-    meta_line = (
-        f'<span class="chip">🌿 <code>{html.escape(snapshot.branch)}</code></span>'
-        f'<span class="chip">⎇ <code>{html.escape(snapshot.head_sha[:12])}</code></span>'
-        f'<span class="chip">📂 <code>{html.escape(snapshot.project_root)}</code></span>'
+    body = (
+        f"<h1>📊 Diff · {html.escape(window_id)}</h1>"
+        f'<div class="meta">{_meta_chips(index, target_n)}</div>'
+        f'<div class="toggle">{_toggle_html(token=token, current=anchor)}</div>'
+        f'<div class="diff">{render_diff_files(files, empty_message=empty)}</div>'
+        f"<script>const DIFF_TOKEN={_js_str(token)};"
+        f"const DIFF_ANCHOR={_js_str(anchor)};{diff_js()}</script>"
     )
-    title = html.escape(f"Diff · {window_id} · {anchor}")
-    page = _PAGE_TEMPLATE.format(
-        window_id=html.escape(window_id),
-        title=title,
-        meta_line=meta_line,
-        toggle_html=_build_toggle(token=token, current=anchor, available=available),
-        diff_html=diff_html,
-        diff_css=diff_page_css(),
+    page = render_page(
+        title=f"Diff · {window_id}",
+        body_html=body,
+        footer="ccgram-pro · diff snapshot · link expires 3 days from issue",
+        extra_css=_TOGGLE_CSS + diff_css(),
     )
     return web.Response(text=page, content_type="text/html")
 
 
+def _js_str(value: str) -> str:
+    """JSON-encode a string for safe inline-script embedding."""
+    return json.dumps(value)
+
+
+def _sanitize_rel_path(path: str) -> str | None:
+    if not path or path.startswith("/") or ".." in path.split("/"):
+        return None
+    return path
+
+
+async def _handle_diff_expand(request: "web.Request") -> "web.Response":
+    # Lazy: aiohttp only needed inside the request handler.
+    from aiohttp import web
+
+    token = request.match_info.get("token", "")
+    bot_token = request.app[_BOT_TOKEN_KEY]
+    try:
+        payload = verify_share_token(token, bot_token=bot_token)
+    except InvalidShareToken:
+        return web.json_response({"error": "invalid"}, status=403)
+
+    window_id = payload.share_id
+    index = load_index(window_id)
+    if index is None or not index.entries:
+        return web.json_response({"lines": []})
+
+    path = _sanitize_rel_path(request.query.get("path", ""))
+    if path is None:
+        return web.json_response({"error": "bad path"}, status=400)
+
+    anchor = request.query.get("anchor", "iteration")
+    if anchor not in _VALID_ANCHORS:
+        anchor = "iteration"
+    _base_n, target_n = _anchor_range(index.entries[-1].n, anchor)
+
+    try:
+        start = max(int(request.query.get("start", "1")), 1)
+        count = max(min(int(request.query.get("count", "40")), _MAX_EXPAND_COUNT), 1)
+    except ValueError:
+        return web.json_response({"error": "bad range"}, status=400)
+
+    content = file_content_at(window_id, n=target_n, path=path)
+    if content is None:
+        return web.json_response({"lines": []})
+    all_lines = content.split("\n")
+    # 1-indexed new-side line numbers → 0-indexed slice.
+    window = all_lines[start - 1 : start - 1 + count]
+    return web.json_response({"lines": window})
+
+
 def register_diff_routes(app: "web.Application") -> None:
-    """Register ``GET /diff/{token}`` on the aiohttp app."""
+    """Register the diff page + context-expand JSON endpoint."""
     app.router.add_get("/diff/{token}", _handle_diff)
-    logger.debug("ccgram-pro diff route registered: GET /diff/{token}")
+    app.router.add_get("/diff/{token}/expand", _handle_diff_expand)
+    logger.debug("ccgram-pro diff routes registered: GET /diff/{token} (+ /expand)")

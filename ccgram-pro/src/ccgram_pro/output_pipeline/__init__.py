@@ -20,7 +20,13 @@ ccgram itself; no patching needed for that one — we just default it on.
 """
 
 from . import progress_bubble
+from .interactive_clean import install_clean_interactive
 from .silencer import install_silencer
 from .summarizer import install_summarizer
 
-__all__ = ["install_silencer", "install_summarizer", "progress_bubble"]
+__all__ = [
+    "install_clean_interactive",
+    "install_silencer",
+    "install_summarizer",
+    "progress_bubble",
+]

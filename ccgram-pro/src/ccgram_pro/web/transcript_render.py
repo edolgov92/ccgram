@@ -57,6 +57,122 @@ def _render_message_text(text: str) -> str:
     return "\n".join(paragraphs) or "<p><em>(empty)</em></p>"
 
 
+class _PlanHtmlBuilder:
+    """Line-fed markdown→HTML builder for plan pages (state machine).
+
+    Split out of a single function so each concern (paragraphs, lists, fenced
+    code) stays small. Input lines must already be ``html.escape``-d.
+    """
+
+    def __init__(self) -> None:
+        self.out: list[str] = []
+        self._code: list[str] = []
+        self._para: list[str] = []
+        self._in_code = False
+        self._list: str | None = None
+
+    def _flush_para(self) -> None:
+        if self._para:
+            self.out.append(f"<p>{_md_inline(' '.join(self._para))}</p>")
+            self._para.clear()
+
+    def _close_list(self) -> None:
+        if self._list:
+            self.out.append(f"</{self._list}>")
+            self._list = None
+
+    def _start_list(self, tag: str) -> None:
+        if self._list != tag:
+            self._close_list()
+            self.out.append(f"<{tag}>")
+            self._list = tag
+
+    def _toggle_code(self) -> None:
+        if self._in_code:
+            self.out.append(f"<pre><code>{chr(10).join(self._code)}</code></pre>")
+            self._code.clear()
+            self._in_code = False
+        else:
+            self._flush_para()
+            self._close_list()
+            self._in_code = True
+
+    def feed(self, line: str) -> None:
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            self._toggle_code()
+            return
+        if self._in_code:
+            self._code.append(line)
+            return
+        if not stripped:
+            self._flush_para()
+            self._close_list()
+            return
+        heading = re.match(r"(#{1,6})\s+(.*)", stripped)
+        if heading:
+            self._flush_para()
+            self._close_list()
+            level = min(len(heading.group(1)) + 1, 4)
+            self.out.append(f"<h{level}>{_md_inline(heading.group(2))}</h{level}>")
+            return
+        bullet = re.match(r"[-*+]\s+(.*)", stripped)
+        if bullet:
+            self._flush_para()
+            self._start_list("ul")
+            self.out.append(f"<li>{_md_inline(bullet.group(1))}</li>")
+            return
+        numbered = re.match(r"\d+[.)]\s+(.*)", stripped)
+        if numbered:
+            self._flush_para()
+            self._start_list("ol")
+            self.out.append(f"<li>{_md_inline(numbered.group(1))}</li>")
+            return
+        self._para.append(stripped)
+
+    def finish(self) -> str:
+        if self._in_code and self._code:
+            self.out.append(f"<pre><code>{chr(10).join(self._code)}</code></pre>")
+        self._flush_para()
+        self._close_list()
+        return "\n".join(self.out) or "<p><em>(empty plan)</em></p>"
+
+
+def render_plan_markdown(md: str) -> str:
+    """Render an ExitPlanMode plan markdown to safe HTML.
+
+    Supports the subset plans actually use: ``#``-``######`` headings (mapped to
+    ``<h2>``-``<h4>``), ``-``/``*``/``+`` and ``1.`` lists, fenced + inline code,
+    ``**bold**``, and paragraphs. Everything is ``html.escape``-d first, so no
+    Claude-authored markup can ever go live.
+    """
+    builder = _PlanHtmlBuilder()
+    for line in html.escape(md).split("\n"):
+        builder.feed(line)
+    return builder.finish()
+
+
+def plan_css() -> str:
+    """CSS for the ``/plan`` page's rendered markdown (``article.plan``)."""
+    return """
+  article.plan { font-size: 1rem; }
+  article.plan h2 { font-size: 1.15rem; margin: 1.2em 0 0.5em; font-weight: 650; }
+  article.plan h3 { font-size: 1.02rem; margin: 1.1em 0 0.45em; font-weight: 620;
+                    color: var(--fg); }
+  article.plan h4 { font-size: 0.95rem; margin: 1em 0 0.4em; color: var(--muted); }
+  article.plan p { margin: 0 0 0.7em; }
+  article.plan ul, article.plan ol { margin: 0.3em 0 0.9em; padding-left: 1.4em; }
+  article.plan li { margin: 0.25em 0; }
+  article.plan strong { color: #fff; font-weight: 640; }
+  article.plan pre { background: #0b0e14; border: 1px solid var(--border-soft);
+                     border-radius: 10px; padding: 11px 13px; overflow-x: auto;
+                     margin: 0.6em 0; }
+  article.plan code { background: var(--elevated); padding: 1.5px 6px;
+                      border-radius: 6px; font-family: var(--mono); font-size: 0.88em; }
+  article.plan pre code { background: none; padding: 0; }
+"""
+
+
 def _format_tool_input(tool_input: dict | None) -> str:
     """Pick the most human-readable rendering of a tool's input."""
     if not tool_input:

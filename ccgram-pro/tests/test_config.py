@@ -173,3 +173,29 @@ def test_coerce_str_only_accepts_strings() -> None:
     assert _coerce_str("hello", "x") == "hello"
     assert _coerce_str(5, "x") == "x"
     assert _coerce_str(None, "x") == "x"
+
+
+def test_reactions_disabled_by_default() -> None:
+    assert Defaults().reactions_enabled is False
+
+
+def test_progress_bubble_enabled_by_default() -> None:
+    assert Defaults().progress_bubble is True
+
+
+def test_delete_transcript_on_teardown_off_by_default() -> None:
+    assert Defaults().delete_transcript_on_teardown is False
+
+
+def test_new_defaults_parse_from_toml(tmp_path: Path) -> None:
+    f = tmp_path / "settings.toml"
+    f.write_text(
+        "[defaults]\n"
+        "reactions_enabled = true\n"
+        "progress_bubble = false\n"
+        "delete_transcript_on_teardown = true\n"
+    )
+    settings = load_settings(f)
+    assert settings.defaults.reactions_enabled is True
+    assert settings.defaults.progress_bubble is False
+    assert settings.defaults.delete_transcript_on_teardown is True

@@ -32,8 +32,14 @@ from .git_composer import install_git_composer
 from .handlers import install_layer_commands
 from .input_pipeline import install_input_pipeline
 from .new_session import install_new_session
-from .output_pipeline import install_silencer, install_summarizer
+from .output_pipeline import (
+    install_clean_interactive,
+    install_silencer,
+    install_summarizer,
+    progress_bubble,
+)
 from .plan_mode import install_plan_approval_surface
+from .session_teardown import install_session_teardown
 from .settings_panel import install_settings_panel
 from .workspaces.runtime import schedule_gc
 
@@ -63,8 +69,21 @@ def install(application: Application) -> None:
     install_new_session(application)
     install_settings_panel(application)
     # After the silencer (so the interactive whitelist + silent checks see the
-    # wrapped chain) — augments ccgram's native ExitPlanMode prompt.
+    # wrapped chain) — augments ccgram's native ExitPlanMode prompt (fallback
+    # path when the clean structured UI can't read the transcript).
     install_plan_approval_surface()
+    # Clean, structured AskUserQuestion + plan prompts (replaces the scraped UI
+    # for those two tools; everything else stays ccgram's).
+    install_clean_interactive(application)
     install_git_composer(application)
     install_layer_commands(application)
+    # Reclaim all per-window resources (workspace, snapshots, sidecar, shares)
+    # when a topic is deleted / its window dies.
+    install_session_teardown(application)
+    # Finalize any progress bubble left spinning by a turn that was in flight
+    # across this restart (its tick task died with the old process).
+    bot = getattr(application, "bot", None)
+    create_task = getattr(application, "create_task", None)
+    if bot is not None and callable(create_task):
+        create_task(progress_bubble.sweep_stale_bubbles(bot))
     logger.info("ccgram-pro %s installed", __version__)

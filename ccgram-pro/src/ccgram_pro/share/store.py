@@ -29,7 +29,7 @@ from ..config import layer_dir
 logger = structlog.get_logger()
 
 
-ShareKind = Literal["claude-turn", "summary", "diff", "pr-log", "raw"]
+ShareKind = Literal["claude-turn", "summary", "diff", "pr-log", "plan", "raw"]
 
 
 def shares_dir() -> Path:
@@ -138,6 +138,35 @@ def load_share(share_id: str) -> ShareRecord:
         created_at=float(meta.get("created_at", 0.0)),
         meta=meta.get("extra", {}) if isinstance(meta.get("extra"), dict) else {},
     )
+
+
+def delete_shares_for_window(window_id: str) -> int:
+    """Delete every share record owned by *window_id*. Returns the count removed.
+
+    Used by session teardown so a deleted topic's view/diff/plan links stop
+    resolving. Best-effort — unreadable records are skipped, not fatal.
+    """
+    # Lazy: shutil only needed on the delete path.
+    import shutil
+
+    root = shares_dir()
+    if not root.is_dir():
+        return 0
+    removed = 0
+    for entry in root.iterdir():
+        if not entry.is_dir():
+            continue
+        meta_path = entry / "meta.json"
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except OSError, json.JSONDecodeError:
+            continue
+        if meta.get("window_id") == window_id:
+            shutil.rmtree(entry, ignore_errors=True)
+            removed += 1
+    if removed:
+        logger.info("Deleted %d share(s) for window %s", removed, window_id)
+    return removed
 
 
 def prune_expired(*, max_age_seconds: int = 7 * 86400) -> int:

@@ -26,7 +26,7 @@ _JOB_NAME = "ccgram_pro_workspace_gc"
 
 
 async def _gc_job(_context: "ContextTypes.DEFAULT_TYPE") -> None:
-    """JobQueue callback — runs one :func:`gc.sweep` pass off the event loop."""
+    """JobQueue callback — runs workspace + diff-snapshot GC off the event loop."""
     result = await asyncio.to_thread(gc_module.sweep)
     if result.total:
         logger.info(
@@ -34,6 +34,14 @@ async def _gc_job(_context: "ContextTypes.DEFAULT_TYPE") -> None:
             result.idle_removed,
             result.orphans_removed,
         )
+    # Prune stale diff snapshots (dirs + git refs) past the retention window.
+    # Lazy: git_ops pulls subprocess; only needed inside the periodic job.
+    from ..git_ops.snapshot import prune_snapshots
+
+    prune_days = load_settings().snapshots.prune_after_days
+    removed = await asyncio.to_thread(prune_snapshots, prune_after_days=prune_days)
+    if removed:
+        logger.info("Diff-snapshot GC: pruned %d stale window(s)", removed)
 
 
 def schedule_gc(application: "Application") -> None:

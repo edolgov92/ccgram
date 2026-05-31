@@ -5,24 +5,43 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-import pytest
 from ccgram_pro.git_ops import (
     BranchInfo,
-    DiffSnapshot,
-    SnapshotNotFound,
     capture_diff_vs_ref,
+    capture_snapshot,
     create_branch,
     current_branch,
+    delete_window_snapshots,
+    diff_between,
+    file_content_at,
+    latest_n,
     list_branches,
-    list_snapshots,
-    load_snapshot,
+    load_index,
     parse_unified_diff,
-    save_snapshot,
+    prune_snapshots,
 )
 
 
 def _git(cwd: Path, *args: str) -> None:
     subprocess.run(["git", "-C", str(cwd), *args], check=True, capture_output=True)
+
+
+def _status(repo: Path) -> str:
+    return subprocess.run(
+        ["git", "-C", str(repo), "status", "--porcelain"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+
+
+def _object_type(repo: Path, sha: str) -> str:
+    return subprocess.run(
+        ["git", "-C", str(repo), "cat-file", "-t", sha],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
 
 
 def _init_repo(root: Path) -> Path:
@@ -110,36 +129,112 @@ def test_parse_unified_diff_multiple_files(tmp_path: Path) -> None:
 # ── snapshot store ──────────────────────────────────────────────────────
 
 
-def test_save_and_load_snapshot(tmp_path: Path) -> None:
+def test_capture_creates_anchor_n0(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
-    (repo / "README.md").write_text("hello\nworld\n")
-    snap = save_snapshot(window_id="@x", label="iteration", project_root=repo)
-    assert isinstance(snap, DiffSnapshot)
-    assert snap.label == "iteration"
-    assert "world" in snap.diff_text
-    loaded = load_snapshot("@x", "iteration")
-    assert loaded.diff_text == snap.diff_text
-    assert loaded.head_sha == snap.head_sha
+    entry = capture_snapshot(window_id="@x", project_root=repo)
+    assert entry.n == 0
+    assert entry.has_changes is False
+    assert _object_type(repo, entry.commit_sha) == "commit"
+    assert latest_n("@x") == 0
 
 
-def test_load_snapshot_raises_on_missing(tmp_path: Path) -> None:
-    with pytest.raises(SnapshotNotFound):
-        load_snapshot("@nope", "iteration")
-
-
-def test_list_snapshots_returns_labels(tmp_path: Path) -> None:
+def test_capture_does_not_touch_working_tree(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
-    (repo / "README.md").write_text("hello\nworld\n")
-    save_snapshot(window_id="@y", label="session", project_root=repo)
-    save_snapshot(window_id="@y", label="iteration", project_root=repo)
-    labels = list_snapshots("@y")
-    assert set(labels) == {"session", "iteration"}
+    (repo / "README.md").write_text("hello\nchanged\n")  # modify tracked
+    (repo / "new.txt").write_text("untracked\n")
+    before = _status(repo)
+    capture_snapshot(window_id="@x", project_root=repo)
+    assert _status(repo) == before  # no temp-index leakage, no staging
 
 
-def test_save_snapshot_rejects_unknown_label(tmp_path: Path) -> None:
+def test_capture_includes_untracked_respects_gitignore(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
-    with pytest.raises(ValueError, match="unknown snapshot label"):
-        save_snapshot(window_id="@x", label="weekly", project_root=repo)
+    capture_snapshot(window_id="@x", project_root=repo)  # n0 pristine
+    (repo / ".gitignore").write_text("blocked.txt\n")
+    (repo / "tracked_new.txt").write_text("kept\n")
+    (repo / "blocked.txt").write_text("SECRETDATA\n")
+    capture_snapshot(window_id="@x", project_root=repo)  # n1
+    diff = diff_between("@x", base_n=0, target_n=1)
+    assert "tracked_new.txt" in diff
+    # The gitignored file's own header + content must be absent from the tree.
+    assert "b/blocked.txt" not in diff
+    assert "SECRETDATA" not in diff
+    assert file_content_at("@x", n=1, path="tracked_new.txt") == "kept\n"
+    assert file_content_at("@x", n=1, path="blocked.txt") is None
+
+
+def test_last_iteration_vs_session(tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path)
+    capture_snapshot(window_id="@x", project_root=repo)  # n0
+    (repo / "a.txt").write_text("first change\n")
+    capture_snapshot(window_id="@x", project_root=repo)  # n1
+    (repo / "b.txt").write_text("second change\n")
+    capture_snapshot(window_id="@x", project_root=repo)  # n2
+    last = diff_between("@x", base_n=1, target_n=2)
+    assert "b.txt" in last and "a.txt" not in last
+    session = diff_between("@x", base_n=0, target_n=2)
+    assert "a.txt" in session and "b.txt" in session
+
+
+def test_no_change_iteration_is_empty(tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path)
+    capture_snapshot(window_id="@x", project_root=repo)  # n0
+    (repo / "a.txt").write_text("change\n")
+    capture_snapshot(window_id="@x", project_root=repo)  # n1
+    e2 = capture_snapshot(window_id="@x", project_root=repo)  # n2, no change
+    assert e2.has_changes is False
+    assert diff_between("@x", base_n=1, target_n=2) == ""
+    assert "a.txt" in diff_between("@x", base_n=0, target_n=2)
+
+
+def test_survives_commit_and_branch_switch(tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path)
+    capture_snapshot(window_id="@x", project_root=repo)  # n0
+    (repo / "a.txt").write_text("work\n")
+    capture_snapshot(window_id="@x", project_root=repo)  # n1
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "commit the work")
+    _git(repo, "checkout", "-q", "-b", "other")
+    # The frozen snapshots still resolve and show the same content.
+    assert "a.txt" in diff_between("@x", base_n=0, target_n=1)
+
+
+def test_empty_repo_no_head(tmp_path: Path) -> None:
+    repo = tmp_path / "empty"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    (repo / "f.txt").write_text("content\n")
+    entry = capture_snapshot(window_id="@e", project_root=repo)
+    assert entry.n == 0
+    assert _object_type(repo, entry.commit_sha) == "commit"
+
+
+def test_file_content_at_missing_returns_none(tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path)
+    capture_snapshot(window_id="@x", project_root=repo)
+    assert file_content_at("@x", n=0, path="README.md") == "hello\n"
+    assert file_content_at("@x", n=0, path="nope/missing.py") is None
+
+
+def test_load_index_absent_returns_none() -> None:
+    assert load_index("@never") is None
+    assert latest_n("@never") is None
+
+
+def test_prune_removes_stale_window(tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path)
+    capture_snapshot(window_id="@old", project_root=repo)
+    assert load_index("@old") is not None
+    removed = prune_snapshots(prune_after_days=1, now=2_000_000_000.0)
+    assert removed >= 1
+    assert load_index("@old") is None
+
+
+def test_delete_window_snapshots(tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path)
+    capture_snapshot(window_id="@x", project_root=repo)
+    delete_window_snapshots("@x")
+    assert load_index("@x") is None
 
 
 # ── branch ops ──────────────────────────────────────────────────────────

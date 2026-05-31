@@ -91,8 +91,13 @@ class WindowSidecar:
     preamble_sent: bool = False
     plan_mode: str = "pending"  # "pending" | "entered" | "approved" | "skipped"
     current_progress_bubble: dict[str, int] | None = (
-        None  # {"thread_id": .., "message_id": ..}
+        None  # {"thread_id": .., "message_id": .., "chat_id": ..}
     )
+    # The most recent turn's posted summary message(s), one per binding —
+    # ``{"chat_id": .., "thread_id": .., "message_id": ..}``. On the next turn
+    # their inline keyboards are stripped so action buttons only ride the
+    # latest message.
+    last_summary_messages: list[dict[str, int]] = field(default_factory=list)
     session_anchor_sha: str | None = None
     last_snapshot_id: str | None = None
     # Workspace bookkeeping — populated by ``ccgram_pro.workspaces.manager`` when
@@ -103,6 +108,10 @@ class WindowSidecar:
     # provisioned for the window.
     workspace_path: str | None = None
     last_activity_at: float | None = None
+    # The source repository a ``worktree``/``clone`` workspace was created from
+    # (absolute path). Persisted so teardown can run ``git worktree remove`` /
+    # delete snapshot refs against the right repo without re-deriving it.
+    source_repo_path: str | None = None
 
 
 def _sidecar_path(window_id: str) -> Path:
@@ -158,21 +167,8 @@ def _quarantine(path: Path, reason: str) -> None:
         logger.warning("Failed to quarantine %s: %s", path, exc)
 
 
-def _deserialize(raw: str, window_id: str, path: Path) -> WindowSidecar | None:
-    """Reconstruct a sidecar from JSON. Returns ``None`` on malformed input.
-
-    On corruption the file is moved aside via :func:`_quarantine` so the next
-    call returns ``None`` cleanly instead of hitting the same parse error.
-    """
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        _quarantine(path, f"JSON decode: {exc}")
-        return None
-    if not isinstance(data, dict):
-        _quarantine(path, f"top-level type {type(data).__name__}, expected dict")
-        return None
-
+def _parse_batch(data: dict[str, Any]) -> list[BatchItem]:
+    """Reconstruct the queued batch items, skipping malformed entries."""
     batch_raw = data.get("current_batch", [])
     items: list[BatchItem] = []
     if isinstance(batch_raw, list):
@@ -190,17 +186,65 @@ def _deserialize(raw: str, window_id: str, path: Path) -> WindowSidecar | None:
                 )
             except TypeError, ValueError:
                 continue
+    return items
 
+
+def _parse_bubble(data: dict[str, Any]) -> dict[str, int] | None:
+    """Reconstruct the progress-bubble coordinates, or ``None`` if malformed."""
     bubble_raw = data.get("current_progress_bubble")
-    bubble: dict[str, int] | None = None
-    if isinstance(bubble_raw, dict):
-        try:
-            bubble = {
-                "thread_id": int(bubble_raw["thread_id"]),
-                "message_id": int(bubble_raw["message_id"]),
-            }
-        except KeyError, TypeError, ValueError:
-            bubble = None
+    if not isinstance(bubble_raw, dict):
+        return None
+    try:
+        bubble = {
+            "thread_id": int(bubble_raw["thread_id"]),
+            "message_id": int(bubble_raw["message_id"]),
+        }
+        if "chat_id" in bubble_raw:
+            bubble["chat_id"] = int(bubble_raw["chat_id"])
+    except KeyError, TypeError, ValueError:
+        return None
+    return bubble
+
+
+def _parse_summaries(data: dict[str, Any]) -> list[dict[str, int]]:
+    """Reconstruct prior-turn summary message coordinates, skipping bad entries."""
+    summaries_raw = data.get("last_summary_messages", [])
+    summaries: list[dict[str, int]] = []
+    if isinstance(summaries_raw, list):
+        for entry in summaries_raw:
+            if not isinstance(entry, dict):
+                continue
+            try:
+                summaries.append(
+                    {
+                        "chat_id": int(entry["chat_id"]),
+                        "thread_id": int(entry["thread_id"]),
+                        "message_id": int(entry["message_id"]),
+                    }
+                )
+            except KeyError, TypeError, ValueError:
+                continue
+    return summaries
+
+
+def _deserialize(raw: str, window_id: str, path: Path) -> WindowSidecar | None:
+    """Reconstruct a sidecar from JSON. Returns ``None`` on malformed input.
+
+    On corruption the file is moved aside via :func:`_quarantine` so the next
+    call returns ``None`` cleanly instead of hitting the same parse error.
+    """
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        _quarantine(path, f"JSON decode: {exc}")
+        return None
+    if not isinstance(data, dict):
+        _quarantine(path, f"top-level type {type(data).__name__}, expected dict")
+        return None
+
+    items = _parse_batch(data)
+    bubble = _parse_bubble(data)
+    summaries = _parse_summaries(data)
 
     try:
         last_activity_raw = data.get("last_activity_at")
@@ -222,10 +266,12 @@ def _deserialize(raw: str, window_id: str, path: Path) -> WindowSidecar | None:
             preamble_sent=bool(data.get("preamble_sent", False)),
             plan_mode=str(data.get("plan_mode", "pending")),
             current_progress_bubble=bubble,
+            last_summary_messages=summaries,
             session_anchor_sha=data.get("session_anchor_sha") or None,
             last_snapshot_id=data.get("last_snapshot_id") or None,
             workspace_path=data.get("workspace_path") or None,
             last_activity_at=last_activity_at,
+            source_repo_path=data.get("source_repo_path") or None,
         )
     except (TypeError, ValueError) as exc:
         _quarantine(path, f"reconstruct failed: {exc}")
@@ -392,6 +438,25 @@ async def update_locked(window_id: str, **changes: Any) -> WindowSidecar | None:
     """
     async with transaction(window_id):
         return update(window_id, **changes)
+
+
+def resolve_repo(window_id: str) -> str | None:
+    """Resolve the git working directory for *window_id*.
+
+    Prefers the sidecar's provisioned ``workspace_path`` (a clone/copy/worktree
+    created for the session) and falls back to the live window's ``cwd``. Used by
+    the diff snapshotter, the git composer, and teardown so every git operation
+    runs against the directory the session actually edits — not the original
+    project path when a workspace was provisioned.
+    """
+    # Lazy: ccgram internal — deferred to avoid a bootstrap import cycle.
+    from ccgram.window_query import view_window
+
+    sidecar = load(window_id)
+    if sidecar and sidecar.workspace_path:
+        return sidecar.workspace_path
+    view = view_window(window_id)
+    return view.cwd if view and view.cwd else None
 
 
 def _lock_for(window_id: str) -> asyncio.Lock:

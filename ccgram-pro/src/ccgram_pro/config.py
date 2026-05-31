@@ -253,10 +253,19 @@ class Defaults:
     batch_mode: bool = True
     plan_mode_on_new_session: bool = True
     preamble: str = _DEFAULT_PREAMBLE
-    # Live "🔧 Working… (Ns)" bubble while Claude processes a turn. Off by
-    # default — the 👀 ack reaction on the user's own message is enough of
-    # an "I'm on it" signal, and an edit-in-place bubble reads as spam.
-    progress_bubble: bool = False
+    # Live "⚙️ Working on your request…" bubble that grows a bulleted list of
+    # Claude's own progress notes while a turn runs, then finalizes to
+    # "✅ Completed" (kept as a record). On by default — it's the user's
+    # primary "what's happening" signal in silent mode.
+    progress_bubble: bool = True
+    # When False (default) the bot adds NO reactions to the user's own
+    # messages (no 👀 ack, no voice-receipt emoji) — keeps the chat free of
+    # bot-authored noise. Operators can re-enable per the layer settings.
+    reactions_enabled: bool = False
+    # When True, deleting a topic also removes the Claude JSONL transcript
+    # directory for a complete wipe. Off by default so /restore + /resume
+    # stay possible after an accidental topic deletion.
+    delete_transcript_on_teardown: bool = False
 
 
 @dataclass(frozen=True)
@@ -308,7 +317,11 @@ def load_settings(path: Path | None = None) -> Settings:
         batch_mode=_coerce_bool(d.get("batch_mode"), True),
         plan_mode_on_new_session=_coerce_bool(d.get("plan_mode_on_new_session"), True),
         preamble=_coerce_str(d.get("preamble"), _DEFAULT_PREAMBLE),
-        progress_bubble=_coerce_bool(d.get("progress_bubble"), False),
+        progress_bubble=_coerce_bool(d.get("progress_bubble"), True),
+        reactions_enabled=_coerce_bool(d.get("reactions_enabled"), False),
+        delete_transcript_on_teardown=_coerce_bool(
+            d.get("delete_transcript_on_teardown"), False
+        ),
     )
     voice = VoiceSettings(
         transcription_note=_coerce_str(

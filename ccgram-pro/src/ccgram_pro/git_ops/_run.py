@@ -33,10 +33,16 @@ def run_git(
     *args: str,
     timeout: int = _DEFAULT_TIMEOUT_SECONDS,
     check: bool = True,
+    env: dict[str, str] | None = None,
 ) -> RunResult:
-    """Run ``git -C <cwd> <args>``. Raises :class:`GitOpError` on non-zero."""
+    """Run ``git -C <cwd> <args>``. Raises :class:`GitOpError` on non-zero.
+
+    *env*, when given, fully replaces the subprocess environment (callers pass
+    ``{**os.environ, "GIT_INDEX_FILE": …}`` to build a tree against a private
+    index without disturbing the user's working index).
+    """
     cmd = ["git", "-C", str(cwd), *args]
-    return _run(cmd, timeout=timeout, check=check)
+    return _run(cmd, timeout=timeout, check=check, env=env)
 
 
 def run_gh(
@@ -56,6 +62,7 @@ def _run(
     cwd: Path | str | None = None,
     timeout: int,
     check: bool,
+    env: dict[str, str] | None = None,
 ) -> RunResult:
     try:
         completed = subprocess.run(
@@ -65,6 +72,7 @@ def _run(
             text=True,
             timeout=timeout,
             check=False,
+            env=env,
         )
     except FileNotFoundError as exc:
         raise GitOpError(cmd, 127, str(exc)) from exc

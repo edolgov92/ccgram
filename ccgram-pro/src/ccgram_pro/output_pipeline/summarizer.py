@@ -39,8 +39,27 @@ logger = structlog.get_logger()
 # does not double-wrap ``_handle_stop``.
 _installed = False
 
-_MAX_INLINE_TEXT_CHARS = 350
 _BUTTON_LABEL = "📎 View full turn"
+
+
+def _build_keyboard(
+    *, link_url: str | None, diff_url: str | None, window_id: str | None
+) -> Any:
+    """Build the View-full / Diff / Settings action row (or None when empty)."""
+    # Lazy: PTB types pulled in only on the actual send path.
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+    row: list[InlineKeyboardButton] = []
+    if link_url:
+        row.append(InlineKeyboardButton(_BUTTON_LABEL, url=link_url))
+    if diff_url:
+        row.append(InlineKeyboardButton("📊 View diff", url=diff_url))
+    if window_id:
+        # Lazy: settings_panel installs alongside; import at send time.
+        from ..settings_panel import button_for_window
+
+        row.append(button_for_window(window_id))
+    return InlineKeyboardMarkup([row]) if row else None
 
 
 async def _post_summary_message(
@@ -52,51 +71,75 @@ async def _post_summary_message(
     link_url: str | None,
     diff_url: str | None = None,
     window_id: str | None = None,
-) -> None:
-    """Send the single Stop summary message with View-full / Diff / Settings buttons."""
-    # Lazy: PTB types pulled in only on the actual send path.
-    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+) -> int | None:
+    """Post the Stop summary IN FULL — split across messages, no truncation.
 
-    # Lazy: PTB types only needed on the handler/send path.
-    from telegram.error import TelegramError
+    The action buttons (View full · View diff · Settings) ride only the LAST
+    chunk. Returns that last chunk's message id (so the caller can strip its
+    keyboard on the next turn), or ``None`` if nothing sent.
+    """
+    # Lazy: entity-safe sender handles markdown→plain fallback + splitting.
+    from ccgram.handlers.messaging_pipeline.message_sender import safe_send
 
-    # All actions on a single row (View full · View diff · Settings).
-    row: list[InlineKeyboardButton] = []
-    if link_url:
-        row.append(InlineKeyboardButton(_BUTTON_LABEL, url=link_url))
-    if diff_url:
-        row.append(InlineKeyboardButton("📊 View diff", url=diff_url))
-    if window_id:
-        # Lazy: settings_panel installs alongside; import at send time.
-        from ..settings_panel import button_for_window
+    # Lazy: 4096-char splitter.
+    from ccgram.telegram_sender import split_message
 
-        row.append(button_for_window(window_id))
-    reply_markup = InlineKeyboardMarkup([row]) if row else None
-    try:
-        await client.send_message(
-            chat_id=chat_id,
+    keyboard = _build_keyboard(
+        link_url=link_url, diff_url=diff_url, window_id=window_id
+    )
+    chunks = split_message(summary) or ["✅ Done."]
+    last_id: int | None = None
+    for idx, chunk in enumerate(chunks):
+        is_last = idx == len(chunks) - 1
+        sent = await safe_send(
+            client,
+            chat_id,
+            chunk,
             message_thread_id=thread_id,
-            text=summary,
-            reply_markup=reply_markup,
+            reply_markup=keyboard if is_last else None,
             disable_notification=True,  # silent ping — user is reading
         )
-    except TelegramError as exc:
-        logger.warning("failed to send Stop summary: %s", exc)
+        if is_last and sent is not None:
+            last_id = sent.message_id
+    return last_id
+
+
+async def _strip_prior_summary_buttons(bot: Any, entries: list[dict[str, int]]) -> None:
+    """Remove inline keyboards from prior turns' summary messages.
+
+    Tolerates BadRequest (message too old / already gone / not modified) so a
+    stale id never aborts the new turn's post.
+    """
+    if bot is None:
+        return
+    # Lazy: only needed in this branch.
+    import contextlib
+
+    # Lazy: PTB error types only needed on the send path.
+    from telegram.error import TelegramError
+
+    for entry in entries:
+        with contextlib.suppress(TelegramError):
+            await bot.edit_message_reply_markup(
+                chat_id=entry["chat_id"],
+                message_id=entry["message_id"],
+                reply_markup=None,
+            )
 
 
 async def _maybe_save_diff_snapshots(*, window_id: str, bot_token: str) -> str | None:
-    """Capture an iteration snapshot (+ session anchor if missing). Return URL."""
-    # Lazy: git_ops pulls subprocess; only needed if we actually have a repo.
-    from ccgram.window_query import view_window
+    """Freeze this turn's working tree as the next snapshot. Return the diff URL.
 
+    Resolves the repo via the workspace-aware ``resolve_repo`` (so clone/worktree
+    sessions snapshot the right tree, not the original project). The capture is
+    serialized per-window so two racing Stops can't both write iteration N. On a
+    non-git workspace the GitOpError is swallowed and no diff link is offered.
+    """
     # Lazy: deferred to avoid a heavy/cyclic import at module load.
-    from ..git_ops import save_snapshot
+    from ..git_ops import capture_snapshot
 
     # Lazy: deferred to avoid a heavy/cyclic import at module load.
     from ..git_ops._run import GitOpError
-
-    # Lazy: deferred to avoid a heavy/cyclic import at module load.
-    from ..git_ops.snapshot import list_snapshots
 
     # Lazy: deferred to avoid a heavy/cyclic import at module load.
     from ..share.links import _miniapp_base_url
@@ -104,25 +147,23 @@ async def _maybe_save_diff_snapshots(*, window_id: str, bot_token: str) -> str |
     # Lazy: deferred to avoid a heavy/cyclic import at module load.
     from ..share.tokens import sign_share_token
 
-    view = view_window(window_id)
-    if not view or not view.cwd:
+    repo = state.resolve_repo(window_id)
+    if not repo:
         return None
 
-    # git subprocesses block — keep them off the event loop.
-    existing = await asyncio.to_thread(list_snapshots, window_id)
     try:
-        if "session" not in existing:
-            await asyncio.to_thread(
-                save_snapshot,
-                window_id=window_id,
-                label="session",
-                project_root=view.cwd,
+        async with state.transaction(window_id):
+            entry = await asyncio.to_thread(
+                capture_snapshot, window_id=window_id, project_root=repo
             )
-        await asyncio.to_thread(
-            save_snapshot, window_id=window_id, label="iteration", project_root=view.cwd
-        )
+            sidecar = state.load(window_id)
+            if sidecar is not None:
+                sidecar.last_snapshot_id = entry.commit_sha
+                if entry.n == 0:
+                    sidecar.session_anchor_sha = entry.commit_sha
+                state.save(sidecar)
     except (GitOpError, ValueError) as exc:
-        logger.debug("diff snapshot save failed for %s: %s", window_id, exc)
+        logger.debug("diff snapshot capture failed for %s: %s", window_id, exc)
         return None
 
     base = _miniapp_base_url()
@@ -177,11 +218,104 @@ def _extract_last_assistant_text_and_tool_count(
     return "\n\n".join(c.strip() for c in text_chunks if c and c.strip()), tool_count
 
 
-async def _handle_stop_summary(event: Any, client: Any) -> None:
-    """The layer-owned Stop handler. Reads transcript, sends one summary."""
+def _resolve_bindings(window_id: str) -> list[tuple[int, int, int]]:
+    """Return the bound ``(user_id, thread_id, chat_id)`` tuples for *window_id*."""
     # Lazy: thread_router is wired by ccgram bootstrap.
     from ccgram.thread_router import thread_router
 
+    bindings: list[tuple[int, int, int]] = []
+    for user_id, thread_map in thread_router.thread_bindings.items():
+        for thread_id, bound_window in thread_map.items():
+            if bound_window == window_id:
+                chat_id = thread_router.resolve_chat_id(user_id, thread_id)
+                if chat_id:
+                    bindings.append((user_id, thread_id, chat_id))
+    return bindings
+
+
+def _build_summary_and_share(
+    *, transcript_path: str, window_id: str, num_turns: int
+) -> tuple[str, str]:
+    """Return ``(summary_text, share_id)`` for the just-finished turn.
+
+    Telegram shows Claude's COMPLETE plain-language summary (the TL;DR block,
+    never truncated); the full technical turn is stored as structured events for
+    the web "View full turn" page. If Claude omitted the TL;DR (trivial turn),
+    fall back to the full last-assistant text with the Telegram-only markers
+    (TL;DR + progress notes) stripped.
+    """
+    # Lazy: transcript_events pulls only stdlib + dataclasses.
+    from .transcript_events import events_to_dicts, extract_events
+
+    # Lazy: tldr is a pure-stdlib layer module.
+    from .tldr import extract_tldr, strip_progress, strip_tldr
+
+    last_text, _tool_count = _extract_last_assistant_text_and_tool_count(
+        transcript_path
+    )
+    events = extract_events(transcript_path)
+    share_body = json.dumps(
+        {"v": 2, "num_turns": num_turns, "events": events_to_dicts(events)},
+        ensure_ascii=False,
+    )
+    share_id = save_share(
+        kind="claude-turn",
+        title=f"Claude turn · {window_id}",
+        body_markdown=share_body,
+        window_id=window_id,
+    )
+
+    tldr = extract_tldr(last_text)
+    if tldr:
+        summary_text = tldr
+    elif last_text:
+        summary_text = strip_progress(strip_tldr(last_text)).strip()
+    else:
+        summary_text = "✅ Done."
+    return (summary_text or "✅ Done."), share_id
+
+
+async def _post_summaries_to_bindings(
+    *,
+    client: Any,
+    bot: Any,
+    window_id: str,
+    bindings: list[tuple[int, int, int]],
+    summary_text: str,
+    link_url: str | None,
+    diff_url: str | None,
+    settings_window: str | None,
+) -> None:
+    """Strip last turn's buttons, post this turn's summary, persist its id(s)."""
+    prior = state.load(window_id)
+    if prior is not None and prior.last_summary_messages:
+        await _strip_prior_summary_buttons(bot, prior.last_summary_messages)
+
+    new_entries: list[dict[str, int]] = []
+    for _user_id, thread_id, chat_id in bindings:
+        last_id = await _post_summary_message(
+            client=client,
+            chat_id=chat_id,
+            thread_id=thread_id,
+            summary=summary_text,
+            link_url=link_url,
+            diff_url=diff_url,
+            window_id=settings_window,
+        )
+        if last_id is not None:
+            new_entries.append(
+                {"chat_id": chat_id, "thread_id": thread_id, "message_id": last_id}
+            )
+
+    async with state.transaction(window_id):
+        sidecar = state.load(window_id)
+        if sidecar is not None:
+            sidecar.last_summary_messages = new_entries
+            state.save(sidecar)
+
+
+async def _handle_stop_summary(event: Any, client: Any) -> None:
+    """The layer-owned Stop handler. Reads transcript, sends one summary."""
     # Lazy: ccgram internal — deferred to avoid an import cycle with ccgram bootstrap (the layer is imported during bootstrap).
     from ccgram.window_query import view_window
 
@@ -210,71 +344,23 @@ async def _handle_stop_summary(event: Any, client: Any) -> None:
         else 0
     )
 
-    # Resolve the bound (user, thread, chat) tuple.
-    bindings: list[tuple[int, int, int]] = []  # (user_id, thread_id, chat_id)
-    for user_id, thread_map in thread_router.thread_bindings.items():
-        for thread_id, bound_window in thread_map.items():
-            if bound_window == window_id:
-                chat_id = thread_router.resolve_chat_id(user_id, thread_id)
-                if chat_id:
-                    bindings.append((user_id, thread_id, chat_id))
+    bindings = _resolve_bindings(window_id)
     if not bindings:
         return
 
-    # Tear down the live "🔧 Working…" bubble before posting the final
-    # summary message, so the user sees one clean transition.
+    # Finalize the live "⚙️ Working on your request…" bubble (relabel to
+    # "✅ Completed", KEEP it as a record of what Claude did) before posting the
+    # final summary below it.
     # Lazy: deferred to avoid a heavy/cyclic import at module load.
     from . import progress_bubble
 
-    bot_for_cleanup = None
-    if hasattr(client, "_bot"):
-        bot_for_cleanup = client._bot  # PTBTelegramClient wraps PTB Bot
+    bot_for_cleanup = client._bot if hasattr(client, "_bot") else None
     if bot_for_cleanup is not None:
-        await progress_bubble.stop_bubble(window_id, bot_for_cleanup)
+        await progress_bubble.finalize_bubble(window_id, bot_for_cleanup)
 
-    # Extract Claude's actual text for the just-finished turn. Claude itself
-    # produces the user-facing summary: an appended system prompt asks it to
-    # end substantive responses with a delimited TL;DR block (see
-    # ``output_pipeline.tldr``). We post that block to Telegram and strip it
-    # from the web "full chat" view. No third-party LLM hop.
-    last_text, _tool_count = _extract_last_assistant_text_and_tool_count(
-        transcript_path
+    summary_text, share_id = _build_summary_and_share(
+        transcript_path=transcript_path, window_id=window_id, num_turns=num_turns
     )
-
-    # Store the turn as STRUCTURED events (JSON) so the /view page can
-    # render a rich chat transcript instead of a flat text dump.
-    # Lazy: transcript_events pulls only stdlib + dataclasses.
-    from .transcript_events import events_to_dicts, extract_events
-
-    events = extract_events(transcript_path)
-    share_body = json.dumps(
-        {"v": 2, "num_turns": num_turns, "events": events_to_dicts(events)},
-        ensure_ascii=False,
-    )
-    share_id = save_share(
-        kind="claude-turn",
-        title=f"Claude turn · {window_id}",
-        body_markdown=share_body,
-        window_id=window_id,
-    )
-
-    # Lazy: tldr is a pure-stdlib layer module.
-    from .tldr import extract_tldr, strip_tldr
-
-    tldr = extract_tldr(last_text)
-    if tldr:
-        short = tldr
-    elif last_text:
-        # No TL;DR block (trivial turn or Claude omitted it) → post the full
-        # last-assistant text, with any partial markers removed, truncated.
-        short = strip_tldr(last_text).strip()
-    else:
-        short = "✅ Done."
-
-    if len(short) > _MAX_INLINE_TEXT_CHARS:
-        short = short[: _MAX_INLINE_TEXT_CHARS - 1].rstrip() + "…"
-    if not short:
-        short = "✅ Done."
 
     # Lazy: config is the source of bot_token + miniapp settings.
     from ccgram.config import config
@@ -291,16 +377,16 @@ async def _handle_stop_summary(event: Any, client: Any) -> None:
     # plan mode); only attach it for Claude windows.
     settings_window = window_id if view.provider_name == "claude" else None
 
-    for _user_id, thread_id, chat_id in bindings:
-        await _post_summary_message(
-            client=client,
-            chat_id=chat_id,
-            thread_id=thread_id,
-            summary=short,
-            link_url=link,
-            diff_url=diff_link,
-            window_id=settings_window,
-        )
+    await _post_summaries_to_bindings(
+        client=client,
+        bot=bot_for_cleanup,
+        window_id=window_id,
+        bindings=bindings,
+        summary_text=summary_text,
+        link_url=link,
+        diff_url=diff_link,
+        settings_window=settings_window,
+    )
 
 
 def install_summarizer() -> None:
