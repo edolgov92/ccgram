@@ -70,6 +70,28 @@ async def test_diff_page_session_anchor(tmp_path: Path) -> None:
     assert "feature.py" in body
 
 
+async def test_diff_session_anchor_excludes_other_branch(tmp_path: Path) -> None:
+    # Session starts on a branch carrying only_on_a.txt, switches branches and
+    # makes one edit. "Since session start" must show only the edit.
+    repo = _init_repo(tmp_path)
+    (repo / "only_on_a.txt").write_text("a-branch\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "a-only work")
+    capture_snapshot(window_id="@dbr", project_root=repo)  # n0
+    _git(repo, "checkout", "-q", "-b", "feature/work")
+    _git(repo, "rm", "-q", "only_on_a.txt")
+    _git(repo, "commit", "-q", "-m", "drop a-only on feature")
+    capture_snapshot(window_id="@dbr", project_root=repo)  # n1 first on feature
+    (repo / "session_edit.py").write_text("x = 1\n")
+    capture_snapshot(window_id="@dbr", project_root=repo)  # n2
+    token = sign_share_token(bot_token=_BOT, share_id="@dbr")
+    async with _DiffServer() as client:
+        async with client.get(f"/diff/{token}?anchor=session") as resp:
+            body = await resp.text()
+    assert "session_edit.py" in body
+    assert "only_on_a.txt" not in body
+
+
 async def test_diff_empty_iteration_shows_empty_state(tmp_path: Path) -> None:
     _seed("@d3", tmp_path, change=False)  # n1 == n0, no change
     token = sign_share_token(bot_token=_BOT, share_id="@d3")

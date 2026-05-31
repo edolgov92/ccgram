@@ -7,6 +7,8 @@ from pathlib import Path
 
 from ccgram_pro.git_ops import (
     BranchInfo,
+    SnapshotEntry,
+    SnapshotIndex,
     capture_diff_vs_ref,
     capture_snapshot,
     create_branch,
@@ -19,6 +21,7 @@ from ccgram_pro.git_ops import (
     load_index,
     parse_unified_diff,
     prune_snapshots,
+    session_base_n,
 )
 
 
@@ -197,6 +200,88 @@ def test_survives_commit_and_branch_switch(tmp_path: Path) -> None:
     _git(repo, "checkout", "-q", "-b", "other")
     # The frozen snapshots still resolve and show the same content.
     assert "a.txt" in diff_between("@x", base_n=0, target_n=1)
+
+
+def _entry(n: int, branch: str) -> SnapshotEntry:
+    return SnapshotEntry(
+        n=n,
+        commit_sha=f"c{n}",
+        tree_sha=f"t{n}",
+        real_head_sha=f"h{n}",
+        branch=branch,
+        captured_at=float(n),
+        has_changes=True,
+    )
+
+
+def test_session_base_n_single_branch_anchors_at_zero() -> None:
+    index = SnapshotIndex(
+        window_id="@x",
+        project_root="/r",
+        entries=[_entry(0, "main"), _entry(1, "main"), _entry(2, "main")],
+    )
+    assert session_base_n(index) == 0
+
+
+def test_session_base_n_reanchors_after_branch_switch() -> None:
+    # Started on branch A (n0,n1), switched to B (n2,n3). "Since session start"
+    # must anchor at the first B snapshot so the A↔B divergence is excluded.
+    index = SnapshotIndex(
+        window_id="@x",
+        project_root="/r",
+        entries=[
+            _entry(0, "fix/a"),
+            _entry(1, "fix/a"),
+            _entry(2, "feature/b"),
+            _entry(3, "feature/b"),
+        ],
+    )
+    assert session_base_n(index) == 2
+
+
+def test_session_base_n_detached_head_falls_back_to_first() -> None:
+    index = SnapshotIndex(
+        window_id="@x",
+        project_root="/r",
+        entries=[_entry(0, "main"), _entry(1, "HEAD")],
+    )
+    assert session_base_n(index) == 0
+
+
+def test_session_base_n_empty_index() -> None:
+    index = SnapshotIndex(window_id="@x", project_root="/r", entries=[])
+    assert session_base_n(index) == 0
+
+
+def test_session_diff_excludes_other_branch_changes(tmp_path: Path) -> None:
+    # Reproduces the prod bug: a session that starts on one branch, switches to
+    # another, then edits. "Since session start" (branch-aware) must show ONLY
+    # the post-switch edit, not the inter-branch divergence.
+    repo = _init_repo(tmp_path)
+    (repo / "only_on_a.txt").write_text("a-branch content\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "work that lives only on branch a")
+    capture_snapshot(window_id="@x", project_root=repo)  # n0 on the start branch
+
+    _git(repo, "checkout", "-q", "-b", "feature/work")
+    _git(repo, "rm", "-q", "only_on_a.txt")
+    _git(repo, "commit", "-q", "-m", "feature branch drops the a-only file")
+    capture_snapshot(window_id="@x", project_root=repo)  # n1 first on feature
+
+    (repo / "session_edit.txt").write_text("the actual session work\n")
+    capture_snapshot(window_id="@x", project_root=repo)  # n2 the session edit
+
+    index = load_index("@x")
+    assert index is not None
+    base = session_base_n(index)
+    assert base == 1  # re-anchored onto feature/work, not n0
+    session_diff = diff_between("@x", base_n=base, target_n=2)
+    assert "session_edit.txt" in session_diff
+    assert "only_on_a.txt" not in session_diff  # the cross-branch file is gone
+
+    # The naive n0→n2 diff DOES leak the cross-branch file (what the bug showed).
+    naive = diff_between("@x", base_n=0, target_n=2)
+    assert "only_on_a.txt" in naive
 
 
 def test_empty_repo_no_head(tmp_path: Path) -> None:

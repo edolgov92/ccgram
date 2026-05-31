@@ -242,6 +242,28 @@ def latest_n(window_id: str) -> int | None:
     return index.entries[-1].n
 
 
+def session_base_n(index: SnapshotIndex) -> int:
+    """Branch-aware base index for the "since session start" diff.
+
+    The literal ``n=0`` anchor can sit on a *different* branch than the latest
+    snapshot when the user switched branches mid-session. Diffing two full
+    working-tree snapshots across that boundary floods the view with the entire
+    inter-branch delta — files the session never touched. So anchor to the
+    earliest snapshot that shares the latest snapshot's branch; fall back to the
+    earliest snapshot when the session stayed on one branch, when HEAD is
+    detached (``"HEAD"``), or when branch info is missing.
+    """
+    if not index.entries:
+        return 0
+    latest_branch = index.entries[-1].branch
+    if not latest_branch or latest_branch == "HEAD":
+        return index.entries[0].n
+    for entry in index.entries:
+        if entry.branch == latest_branch:
+            return entry.n
+    return index.entries[0].n
+
+
 def _commit_for(index: SnapshotIndex, n: int) -> str | None:
     for entry in index.entries:
         if entry.n == n:

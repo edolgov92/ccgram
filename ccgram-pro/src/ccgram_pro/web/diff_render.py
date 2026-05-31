@@ -257,7 +257,7 @@ def diff_css() -> str:
           color: var(--faint); user-select: none; vertical-align: top;
           border-right: 1px solid var(--border-soft); white-space: nowrap; }
   table.diff-body td.code { padding: 0 12px; white-space: pre-wrap; word-break: break-word; }
-  tr.add { background: rgba(46,160,67,.16); } tr.add td.ln { color: #3fb950; }
+  tr.add { background: rgb(16 166 44 / 31%); } tr.add td.ln { color: #3fb950; }
   tr.del { background: rgba(248,81,73,.16); } tr.del td.ln { color: #f85149; }
   tr.add td.code mark { background: rgba(46,160,67,.40); color: #d7ffe0;
           border-radius: 3px; padding: 0 1px; }

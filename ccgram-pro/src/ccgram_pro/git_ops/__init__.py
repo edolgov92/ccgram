@@ -56,6 +56,7 @@ from .snapshot import (
     latest_n,
     load_index,
     prune_snapshots,
+    session_base_n,
 )
 
 __all__ = [
@@ -96,6 +97,7 @@ __all__ = [
     "prune_snapshots",
     "push_branch",
     "remote_branch_exists",
+    "session_base_n",
     "remote_exists",
     "working_tree_status",
 ]

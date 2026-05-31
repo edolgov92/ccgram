@@ -39,7 +39,10 @@ logger = structlog.get_logger()
 # does not double-wrap ``_handle_stop``.
 _installed = False
 
-_BUTTON_LABEL = "📎 View full turn"
+# Icon-only labels — text gets clipped on mobile, so the action row is glyphs.
+# 📄 = full turn (URL), 🆚 = diff/compare (URL), ⚙️ = settings (callback, from
+# settings_panel.button_for_window). URL buttons also show Telegram's ↗ hint.
+_BUTTON_LABEL = "📄"
 
 
 def _build_keyboard(
@@ -53,11 +56,16 @@ def _build_keyboard(
     if link_url:
         row.append(InlineKeyboardButton(_BUTTON_LABEL, url=link_url))
     if diff_url:
-        row.append(InlineKeyboardButton("📊 View diff", url=diff_url))
+        row.append(InlineKeyboardButton("🆚", url=diff_url))
     if window_id:
         # Lazy: settings_panel installs alongside; import at send time.
         from ..settings_panel import button_for_window
 
+        # Lazy: scenarios installs alongside; import at send time.
+        from ..scenarios import scenarios_button_for_window
+
+        # 🎬 Scenarios sits just before ⚙️ Settings on the action row.
+        row.append(scenarios_button_for_window(window_id))
         row.append(button_for_window(window_id))
     return InlineKeyboardMarkup([row]) if row else None
 

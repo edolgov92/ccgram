@@ -20,7 +20,12 @@ import structlog
 from ccgram.miniapp.server import _BOT_TOKEN_KEY  # type: ignore[attr-defined]
 
 from ..git_ops.diff import parse_unified_diff
-from ..git_ops.snapshot import diff_between, file_content_at, load_index
+from ..git_ops.snapshot import (
+    diff_between,
+    file_content_at,
+    load_index,
+    session_base_n,
+)
 from ..share.tokens import InvalidShareToken, verify_share_token
 from ._page_shell import render_page
 from .diff_render import diff_css, diff_js, render_diff_files
@@ -34,10 +39,17 @@ _VALID_ANCHORS = ("iteration", "session")
 _MAX_EXPAND_COUNT = 200
 
 
-def _anchor_range(latest: int, anchor: str) -> tuple[int, int]:
-    """Map an anchor to ``(base_n, target_n)`` snapshot indices."""
+def _anchor_range(index, anchor: str) -> tuple[int, int]:
+    """Map an anchor to ``(base_n, target_n)`` snapshot indices.
+
+    ``session`` anchors to the earliest snapshot on the *current* branch (via
+    :func:`session_base_n`), not the literal ``n=0`` — so a mid-session branch
+    switch never leaks the inter-branch delta into the "since session start"
+    diff. ``iteration`` is the previous snapshot → the latest.
+    """
+    latest = index.entries[-1].n
     if anchor == "session":
-        return 0, latest
+        return session_base_n(index), latest
     return max(latest - 1, 0), latest
 
 
@@ -98,8 +110,7 @@ async def _handle_diff(request: "web.Request") -> "web.Response":
     anchor = request.query.get("anchor", "iteration")
     if anchor not in _VALID_ANCHORS:
         anchor = "iteration"
-    latest = index.entries[-1].n
-    base_n, target_n = _anchor_range(latest, anchor)
+    base_n, target_n = _anchor_range(index, anchor)
 
     raw = diff_between(window_id, base_n=base_n, target_n=target_n)
     files = parse_unified_diff(raw)
@@ -159,7 +170,7 @@ async def _handle_diff_expand(request: "web.Request") -> "web.Response":
     anchor = request.query.get("anchor", "iteration")
     if anchor not in _VALID_ANCHORS:
         anchor = "iteration"
-    _base_n, target_n = _anchor_range(index.entries[-1].n, anchor)
+    _base_n, target_n = _anchor_range(index, anchor)
 
     try:
         start = max(int(request.query.get("start", "1")), 1)

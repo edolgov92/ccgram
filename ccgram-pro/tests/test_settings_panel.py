@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 from ccgram_pro import settings_panel as sp
 from ccgram_pro import state
@@ -114,3 +116,89 @@ async def test_apply_mode_delegates_to_drive(monkeypatch) -> None:
     assert calls == [("@5", "plan")]
     await sp.apply_mode("@5", "code")
     assert calls[-1] == ("@5", "coding")
+
+
+class _Query:
+    def __init__(self) -> None:
+        self.answers: list[tuple[tuple, dict]] = []
+        self.edits: list[dict] = []
+        self.message = None
+
+    async def answer(self, *a, **k) -> None:
+        self.answers.append((a, k))
+
+    async def edit_message_text(self, **k) -> None:
+        self.edits.append(k)
+
+
+def _stub_router(monkeypatch) -> None:
+    import ccgram.thread_router as tr
+
+    monkeypatch.setattr(
+        tr, "thread_router", SimpleNamespace(get_display_name=lambda wid: wid)
+    )
+
+
+async def test_mode_applies_mid_session(monkeypatch) -> None:
+    state.save(state.WindowSidecar(window_id="@5", window_creation_epoch=0.0))
+    applied: list[tuple[str, str]] = []
+
+    async def _apply_mode(window_id, payload):
+        applied.append((window_id, payload))
+        return True
+
+    _stub_router(monkeypatch)
+    monkeypatch.setattr(sp, "apply_mode", _apply_mode)
+    query = _Query()
+    await sp._apply_change(query, "@5", "mo", "plan")
+    assert applied == [("@5", "plan")]
+    assert any("Plan" in str(a) for a, _k in query.answers)
+    assert not any("busy" in str(a).lower() for a, _k in query.answers)
+    assert state.load("@5").mode == "plan"
+
+
+async def test_model_applies_mid_session(monkeypatch) -> None:
+    state.save(state.WindowSidecar(window_id="@5", window_creation_epoch=0.0))
+    applied: list[str] = []
+
+    async def _apply_model(window_id, payload):  # noqa: ARG001
+        applied.append(payload)
+        return True
+
+    _stub_router(monkeypatch)
+    monkeypatch.setattr(sp, "apply_model", _apply_model)
+    query = _Query()
+    await sp._apply_change(query, "@5", "m", "opus48-1m")
+    assert applied == ["opus48-1m"]
+    assert not any("busy" in str(a).lower() for a, _k in query.answers)
+    assert state.load("@5").model == "opus48-1m"
+
+
+async def test_effort_applies_mid_session(monkeypatch) -> None:
+    state.save(state.WindowSidecar(window_id="@5", window_creation_epoch=0.0))
+    applied: list[str] = []
+
+    async def _apply_effort(window_id, payload):  # noqa: ARG001
+        applied.append(payload)
+        return True
+
+    _stub_router(monkeypatch)
+    monkeypatch.setattr(sp, "apply_effort", _apply_effort)
+    query = _Query()
+    await sp._apply_change(query, "@5", "e", "max")
+    assert applied == ["max"]
+    assert not any("busy" in str(a).lower() for a, _k in query.answers)
+    assert state.load("@5").reasoning == "max"
+
+
+async def test_failed_apply_reports_error(monkeypatch) -> None:
+    state.save(state.WindowSidecar(window_id="@5", window_creation_epoch=0.0))
+
+    async def _apply_effort(window_id, payload):  # noqa: ARG001
+        return False
+
+    _stub_router(monkeypatch)
+    monkeypatch.setattr(sp, "apply_effort", _apply_effort)
+    query = _Query()
+    await sp._apply_change(query, "@5", "e", "max")
+    assert any("couldn't apply" in str(a).lower() for a, _k in query.answers)

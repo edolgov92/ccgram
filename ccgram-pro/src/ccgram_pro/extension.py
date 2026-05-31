@@ -39,6 +39,7 @@ from .output_pipeline import (
     progress_bubble,
 )
 from .plan_mode import install_plan_approval_surface
+from .scenarios import install_scenarios
 from .session_teardown import install_session_teardown
 from .settings_panel import install_settings_panel
 from .workspaces.runtime import schedule_gc
@@ -68,6 +69,8 @@ def install(application: Application) -> None:
     install_input_pipeline(application)
     install_new_session(application)
     install_settings_panel(application)
+    # 🎬 Scenarios action-row button + handlers (self-review, PR auto-fixer).
+    install_scenarios(application)
     # After the silencer (so the interactive whitelist + silent checks see the
     # wrapped chain) — augments ccgram's native ExitPlanMode prompt (fallback
     # path when the clean structured UI can't read the transcript).

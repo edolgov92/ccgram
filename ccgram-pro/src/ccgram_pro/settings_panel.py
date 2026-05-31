@@ -11,10 +11,12 @@ Changes apply LIVE to the running session and persist to the sidecar:
 - Reasoning→ ``/effort <level>``  (non-interactive)
 - Mode     → bounded Shift+Tab drive via :func:`plan_mode.drive_to_mode`
 
-Live changes are gated on the session being idle (a rendered prompt and no
-active status line) so we never interleave a slash command into a running
-turn. The summary that hosts the button is posted at Stop, i.e. when the
-session is idle, so the common path "tap right after a response" always works.
+All three levers apply at any time, busy or idle — mirroring Claude Code, where
+``/model`` / ``/effort`` (client-side slash commands) and the Shift+Tab mode
+cycle are all accepted mid-turn. There is deliberately no idle gate: an earlier
+one keyed off a scraped permission-mode marker that a default-mode "Coding"
+session never renders, so it misreported every such session as busy and blocked
+the change outright.
 """
 
 from __future__ import annotations
@@ -92,9 +94,8 @@ def button_for_window(window_id: str) -> Any:
     # Lazy: PTB types only needed on the handler/send path.
     from telegram import InlineKeyboardButton
 
-    return InlineKeyboardButton(
-        "⚙️ Settings", callback_data=encode("open", None, window_id)
-    )
+    # Icon-only — mobile clips button text. ⚙️ reads as "settings" on its own.
+    return InlineKeyboardButton("⚙️", callback_data=encode("open", None, window_id))
 
 
 def _norm_model(value: str) -> str:
@@ -158,33 +159,6 @@ def _menu_text(window_id: str, sidecar: state.WindowSidecar | None) -> str:
 
 
 # ── live apply ───────────────────────────────────────────────────────────────
-
-
-async def _is_idle(window_id: str) -> bool:
-    """True when the pane shows a prompt and no active status line."""
-    # Lazy: ccgram internals — deferred to avoid a bootstrap import cycle.
-    from ccgram.providers.claude import ClaudeProvider
-
-    # Lazy: ccgram internal — deferred to avoid a bootstrap import cycle.
-    from ccgram.tmux_manager import tmux_manager
-
-    try:
-        capture = await tmux_manager.capture_pane(window_id)
-    except OSError:
-        return False
-    if not capture:
-        return False
-
-    async def _capture_fn(_wid: str) -> str | None:
-        return capture
-
-    provider = ClaudeProvider()
-    try:
-        mode = await provider.scrape_current_mode(window_id, capture_fn=_capture_fn)
-    except OSError:
-        return False
-    status = provider.parse_terminal_status(capture)
-    return bool(mode) and status is None
 
 
 async def apply_model(window_id: str, model_key: str) -> bool:
@@ -313,12 +287,11 @@ async def _apply_change(
     if payload is None:
         await query.answer("Invalid", show_alert=True)
         return
-    if not await _is_idle(window_id):
-        await query.answer(
-            "⏳ Session is busy — try again once it's idle.", show_alert=True
-        )
-        return
-
+    # No idle gate: model/effort are client-side slash commands and mode is a
+    # Shift+Tab keystroke — Claude Code accepts all three at any time, busy or
+    # idle, exactly like driving them by hand in the app. (The old gate keyed
+    # off a scraped permission-mode marker, which a default-mode "Coding"
+    # session never shows, so it wrongly reported every such session as busy.)
     ok = False
     toast = ""
     if action == "m" and payload in _MODEL_ID:
