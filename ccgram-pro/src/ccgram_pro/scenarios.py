@@ -160,6 +160,9 @@ def scenarios_button_for_window(window_id: str) -> Any:
 
 
 async def _git_remote_url(repo_path: str) -> str | None:
+    # Lazy: only needed on this path.
+    import contextlib
+
     try:
         proc = await asyncio.create_subprocess_exec(
             "git",
@@ -171,8 +174,14 @@ async def _git_remote_url(repo_path: str) -> str | None:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
         )
-        out, _ = await proc.communicate()
     except OSError, ValueError:
+        return None
+    try:
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=5.0)
+    except TimeoutError, OSError:
+        # A wedged `git` must never hang a menu open — reap and bail.
+        with contextlib.suppress(ProcessLookupError):
+            proc.kill()
         return None
     if proc.returncode != 0:
         return None
@@ -277,6 +286,8 @@ async def handle_scenarios_callback(update: Any, context: Any) -> None:
 
     try:
         await _dispatch(update, context)
+    except Exception:  # noqa: BLE001 -- log, then stop the handler chain below
+        logger.exception("scenarios callback failed")
     finally:
         raise ApplicationHandlerStop
 
@@ -307,6 +318,9 @@ async def _dispatch(update: Any, context: Any) -> None:
     thread_id = get_thread_id(update)
     if thread_id is None:
         await query.answer("No topic context", show_alert=True)
+        return
+    if query.message is None:
+        await query.answer("This card expired — reopen the menu.", show_alert=True)
         return
 
     if action == "menu":
@@ -421,8 +435,9 @@ async def _cancel(query: Any, context: Any) -> None:
 
     if context.user_data is not None:
         context.user_data.pop(AWAITING_PR_NUMBER, None)
-    with contextlib.suppress(TelegramError):
-        await query.message.delete()
+    if query.message is not None:
+        with contextlib.suppress(TelegramError):
+            await query.message.delete()
     await query.answer("Cancelled")
 
 
