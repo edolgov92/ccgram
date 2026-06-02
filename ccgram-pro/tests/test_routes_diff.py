@@ -70,6 +70,46 @@ async def test_diff_page_session_anchor(tmp_path: Path) -> None:
     assert "feature.py" in body
 
 
+def test_file_header_is_bright_and_sticky() -> None:
+    from ccgram_pro.web.diff_render import diff_css
+
+    css = diff_css()
+    # Sticky per-file header (GitHub-style pin while scrolling that file).
+    assert "position: sticky" in css
+    # overflow:clip (not hidden) keeps rounded corners without breaking sticky.
+    assert "overflow: clip" in css
+    assert "overflow: hidden" not in css
+    # Header is brighter than the file body: elevated bg + bright fg + bold.
+    assert "background: var(--elevated)" in css
+    assert "color: var(--fg)" in css
+
+
+def test_line_number_toggle_present() -> None:
+    from ccgram_pro.web.diff_render import diff_css, diff_js
+
+    css = diff_css()
+    js = diff_js()
+    assert ".diff.hide-ln table.diff-body td.ln { display: none; }" in css
+    assert "function ccgToggleLn()" in css + js
+    assert "localStorage" in js  # preference persists across views
+
+
+def test_landscape_text_size_pinned() -> None:
+    from ccgram_pro.web._page_shell import render_page
+
+    page = render_page(title="t", body_html="<p>x</p>")
+    assert "text-size-adjust: 100%" in page
+
+
+async def test_diff_page_has_line_number_toggle_button(tmp_path: Path) -> None:
+    _seed("@dln", tmp_path, change=True)
+    token = sign_share_token(bot_token=_BOT, share_id="@dln")
+    async with _DiffServer() as client, client.get(f"/diff/{token}") as resp:
+        body = await resp.text()
+    assert 'id="lnBtn"' in body
+    assert "ccgToggleLn()" in body
+
+
 async def test_diff_session_anchor_excludes_other_branch(tmp_path: Path) -> None:
     # Session starts on a branch carrying only_on_a.txt, switches branches and
     # makes one edit. "Since session start" must show only the edit.

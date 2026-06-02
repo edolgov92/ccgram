@@ -394,9 +394,16 @@ def install_input_pipeline(application: "Application") -> None:
         ),
         group=-11,
     )
+    # Batch-aware photo/document handlers (group -14), ahead of ccgram's core
+    # group-0 upload handlers — capture uploads into the batch when batched,
+    # else pass through to the immediate-upload path.
+    # Lazy: deferred to avoid a heavy/cyclic import at module load.
+    from . import file_batch
+
+    file_batch.register_file_batch_handlers(application)
 
     _installed = True
-    logger.info("ccgram-pro input pipeline installed — batched text + voice flow")
+    logger.info("ccgram-pro input pipeline installed — batched text + voice + files")
 
 
 def _reset_for_testing() -> None:

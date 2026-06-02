@@ -240,12 +240,20 @@ def diff_css() -> str:
   .stat { font-size: 0.74rem; font-family: var(--mono); }
   .stat.add { color: #3fb950; } .stat.del { color: #f85149; }
   details.file { border: 1px solid var(--border); border-radius: 10px;
-               margin-bottom: 16px; overflow: hidden; background: var(--surface); }
-  details.file > summary { cursor: pointer; padding: 10px 13px; font-family: var(--mono);
+               margin-bottom: 16px; overflow: clip; background: var(--surface); }
+  /* File header: brighter than the body, and sticky so it pins to the top
+     while you scroll that file's diff (GitHub-style). overflow:clip on .file
+     keeps the rounded corners WITHOUT becoming a scroll container — which is
+     what overflow:hidden would do, defeating the sticky child. */
+  details.file > summary { cursor: pointer; padding: 11px 13px; font-family: var(--mono);
                font-size: 0.82rem; word-break: break-all; display: flex; gap: 9px;
-               align-items: center; list-style: none; }
+               align-items: center; list-style: none; color: var(--fg);
+               font-weight: 600; background: var(--elevated);
+               border-bottom: 1px solid var(--border);
+               position: sticky; top: 0; z-index: 3; }
+  details.file:not([open]) > summary { border-bottom: 0; }
   details.file > summary::-webkit-details-marker { display: none; }
-  details.file > summary::before { content: '▸'; color: var(--faint);
+  details.file > summary::before { content: '▸'; color: var(--muted); font-weight: 400;
                transition: transform .15s ease; }
   details.file[open] > summary::before { transform: rotate(90deg); }
   details.file > summary .stat { margin-left: 0; }
@@ -271,6 +279,15 @@ def diff_css() -> str:
   tr.expander button.exp:hover { color: var(--accent); }
   tr.truncated td { padding: 8px 14px; color: var(--muted); font-style: italic; }
   .empty { color: var(--muted); text-align: center; padding: 32px 16px; font-size: 1rem; }
+  .opts { margin: -8px 0 16px; }
+  .opt { background: var(--surface); color: var(--muted); border: 1px solid var(--border-soft);
+         border-radius: 9px; padding: 6px 13px; font-size: 0.78rem; font-weight: 550;
+         cursor: pointer; font-family: var(--font); }
+  .opt:hover { color: var(--accent); }
+  .opt.active { background: linear-gradient(140deg,#6d8bff,#b69cff); color: #0b0d12;
+         border-color: transparent; }
+  /* Hide the old/new line-number gutter (reclaims width on mobile). */
+  .diff.hide-ln table.diff-body td.ln { display: none; }
 """
 
 
@@ -314,4 +331,20 @@ def diff_js() -> str:
   document.addEventListener('click', e => {
     if(e.target && e.target.classList && e.target.classList.contains('exp')) ccgExpand(e.target);
   });
+  function ccgApplyLn(hide){
+    const diff = document.querySelector('.diff');
+    const btn = document.getElementById('lnBtn');
+    if(diff) diff.classList.toggle('hide-ln', hide);
+    if(btn){ btn.classList.toggle('active', hide);
+             btn.textContent = hide ? '# Show line numbers' : '# Hide line numbers'; }
+  }
+  function ccgLnStored(){
+    try { return localStorage.getItem('ccg_hide_ln') === '1'; } catch(e){ return false; }
+  }
+  function ccgToggleLn(){
+    const hide = !ccgLnStored();
+    try { localStorage.setItem('ccg_hide_ln', hide ? '1' : '0'); } catch(e){}
+    ccgApplyLn(hide);
+  }
+  ccgApplyLn(ccgLnStored());
 """

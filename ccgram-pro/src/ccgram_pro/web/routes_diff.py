@@ -123,6 +123,8 @@ async def _handle_diff(request: "web.Request") -> "web.Response":
         f"<h1>📊 Diff · {html.escape(window_id)}</h1>"
         f'<div class="meta">{_meta_chips(index, target_n)}</div>'
         f'<div class="toggle">{_toggle_html(token=token, current=anchor)}</div>'
+        '<div class="opts"><button type="button" id="lnBtn" class="opt" '
+        'onclick="ccgToggleLn()"># Hide line numbers</button></div>'
         f'<div class="diff">{render_diff_files(files, empty_message=empty)}</div>'
         f"<script>const DIFF_TOKEN={_js_str(token)};"
         f"const DIFF_ANCHOR={_js_str(anchor)};{diff_js()}</script>"

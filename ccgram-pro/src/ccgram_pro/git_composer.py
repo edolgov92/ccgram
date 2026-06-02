@@ -734,11 +734,15 @@ def install_git_composer(application: Any) -> None:
         CallbackQueryHandler(handle_git_callback, pattern=r"^ccgrampro:git:"),
         group=-10,
     )
-    # group=-11 so an armed composer reply is consumed before new-session /
-    # batcher / forward handling runs.
+    # group=-13: its OWN group so it always gets a turn. PTB runs at most one
+    # handler per group, so sharing a group with another TEXT consumer (e.g.
+    # voice-edit at -11) would let whichever registered first shadow the rest.
+    # Layer text-consumer groups: git-composer -13, scenarios PR-number -12,
+    # voice-edit -11 — all ahead of ccgram's core text handler (group 0), each a
+    # cheap pass-through when its own flow isn't armed.
     application.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, capture_composer_text),
-        group=-11,
+        group=-13,
     )
     _installed = True
     logger.info("ccgram-pro git composer installed — branch/commit/push/PR")

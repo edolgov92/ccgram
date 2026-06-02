@@ -43,7 +43,7 @@ async def enqueue(
 
     ``index`` is 1-based — convenient for the "Item 1/3" status string.
     """
-    if kind not in ("text", "voice"):
+    if kind not in ("text", "voice", "file"):
         raise ValueError(f"unknown batch item kind: {kind!r}")
     async with state.transaction(window_id):
         sidecar = state.get_or_create(window_id)

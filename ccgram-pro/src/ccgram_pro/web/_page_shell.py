@@ -18,6 +18,10 @@ _CSS = """
     --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
     --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
   * { box-sizing: border-box; }
+  /* Pin text size across orientation changes — without this, mobile browsers
+     auto-inflate font sizes in landscape (text-autosizing), which made wide
+     code unreadable. 100% = use the authored size, never inflate. */
+  html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   body { margin:0; background:var(--bg); color:var(--fg); font-family:var(--font);
     font-size:15.5px; line-height:1.6; -webkit-font-smoothing:antialiased; }
   main { max-width:720px; margin:0 auto; padding:24px 16px 96px; }

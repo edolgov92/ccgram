@@ -55,7 +55,7 @@ _window_locks: dict[str, asyncio.Lock] = {}
 class BatchItem:
     """One queued message in the user's accumulated batch."""
 
-    kind: str  # "text" | "voice"
+    kind: str  # "text" | "voice" | "file"
     body: str
     transcribing: bool = False
     received_at: float = field(default_factory=time.time)
