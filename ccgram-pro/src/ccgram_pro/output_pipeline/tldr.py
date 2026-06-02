@@ -48,15 +48,22 @@ _PROGRESS_RE = re.compile(
 )
 
 PROGRESS_SYSTEM_PROMPT = (
-    "While working through a longer task, narrate your progress for someone "
-    "watching on their phone: as you START each distinct step, emit a single "
-    "short line (≈3-8 words, ideally under 80 characters) wrapped EXACTLY in "
-    f"these markers on their own line:\n{PROGRESS_OPEN}Reading the auth module"
-    f"{PROGRESS_CLOSE}\n"
-    "Examples: 'Mapping the data flow', 'Editing the login handler', 'Running "
-    "the test suite', 'Investigating the failure'. Emit one as you begin each "
-    "step — they are invisible in the rendered message and used only to drive a "
-    "live progress indicator. Skip them for trivial, single-step replies."
+    "LIVE PROGRESS (REQUIRED — not optional narration): the user watches a live "
+    "status indicator while you work, fed by short progress markers you emit. "
+    "You MUST keep it updated.\n"
+    "Rule: BEFORE each tool call (reading a file, editing, writing, running a "
+    "command, searching, fetching, launching a subtask, etc.) and as you START "
+    "each new step of the task, first output ONE status line saying what you are "
+    "about to do, wrapped EXACTLY in these markers on their own line:\n"
+    f"{PROGRESS_OPEN}Reading the auth module{PROGRESS_CLOSE}\n"
+    "Keep each line short (3-8 words, under ~80 chars) and present-tense, e.g. "
+    "'Mapping the data flow', 'Editing the login handler', 'Running the test "
+    "suite', 'Investigating the failure', 'Reviewing the changes'. Emit a fresh "
+    "marker for every new step — expect several per turn on any multi-step task. "
+    "They are stripped from your rendered reply (they only drive the indicator), "
+    "so there is no cost to emitting them and you must never skip them to save "
+    "space. The ONLY time you may omit them is a reply that uses no tools at all "
+    "(a greeting, a one-line answer, or a clarifying question)."
 )
 
 # Appended verbatim to every Claude launch so Claude itself produces both the

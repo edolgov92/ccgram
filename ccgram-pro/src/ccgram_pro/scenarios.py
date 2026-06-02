@@ -131,6 +131,19 @@ def _pr_fixer_prompt(pr: str, repo: str) -> str:
     return _PR_FIXER_TEMPLATE.replace("__PR__", pr).replace("__REPO__", repo)
 
 
+_COMMIT_PUSH_PROMPT = """\
+Please commit the current changes and push them.
+
+- First review what actually changed (git status + git diff). Stage only the files that belong in this change — do NOT blindly `git add -A`. Leave out anything that looks unintended or unrelated (build artifacts, local scratch/config, editor files, files outside the scope of recent work); if you spot such a file, leave it unstaged and tell me about it.
+- Write a clear, meaningful commit message describing the INTENT of the change (not a file list), following this project's existing commit-message conventions (use Conventional Commits if that's the style here).
+- Do NOT add a `Co-Authored-By` trailer and do NOT mention Claude, AI, or this assistant anywhere in the commit message.
+- Then push to the current branch's upstream (set the upstream if it doesn't exist yet).
+- If there is nothing staged to commit but there are unpushed commits, just push them.
+- If there is genuinely nothing to commit or push, say so. If anything is ambiguous or risky (unrelated changes mixed together, a force-push would be needed, detached HEAD, conflicts), STOP and ask me instead of guessing.
+
+When done, report the exact commit message you used and the push result (branch + remote)."""
+
+
 # ── callback codec (window_id is the trailing, colon-safe field) ───────────────
 
 
@@ -143,7 +156,7 @@ def _decode(data: str) -> tuple[str, str] | None:
     if not data.startswith(_CB_PREFIX):
         return None
     action, _, window_id = data[len(_CB_PREFIX) :].partition(":")
-    if action not in ("menu", "sr", "pr", "x") or not window_id:
+    if action not in ("menu", "sr", "cp", "pr", "x") or not window_id:
         return None
     return action, window_id
 
@@ -159,7 +172,11 @@ def scenarios_button_for_window(window_id: str) -> Any:
 # ── repo / eligibility ─────────────────────────────────────────────────────────
 
 
-async def _git_remote_url(repo_path: str) -> str | None:
+async def _run_git(repo_path: str, *args: str) -> str | None:
+    """Run ``git -C <repo_path> <args>`` and return trimmed stdout, or None.
+
+    Bounded by a 5s timeout (a wedged git must never hang a menu open).
+    """
     # Lazy: only needed on this path.
     import contextlib
 
@@ -168,9 +185,7 @@ async def _git_remote_url(repo_path: str) -> str | None:
             "git",
             "-C",
             repo_path,
-            "remote",
-            "get-url",
-            "origin",
+            *args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
         )
@@ -179,13 +194,24 @@ async def _git_remote_url(repo_path: str) -> str | None:
     try:
         out, _ = await asyncio.wait_for(proc.communicate(), timeout=5.0)
     except TimeoutError, OSError:
-        # A wedged `git` must never hang a menu open — reap and bail.
         with contextlib.suppress(ProcessLookupError):
             proc.kill()
         return None
     if proc.returncode != 0:
         return None
     return out.decode("utf-8", "replace").strip() or None
+
+
+async def _git_remote_url(repo_path: str) -> str | None:
+    return await _run_git(repo_path, "remote", "get-url", "origin")
+
+
+async def _is_git_repo(window_id: str) -> bool:
+    """True when the session's resolved directory is inside a git work tree."""
+    repo_path = state.resolve_repo(window_id)
+    if not repo_path:
+        return False
+    return await _run_git(repo_path, "rev-parse", "--is-inside-work-tree") == "true"
 
 
 async def _detect_pr_repo(window_id: str) -> str | None:
@@ -323,10 +349,24 @@ async def _dispatch(update: Any, context: Any) -> None:
         await query.answer("This card expired — reopen the menu.", show_alert=True)
         return
 
+    await _route_topic_action(query, action, window_id, user_id, thread_id, context)
+
+
+async def _route_topic_action(
+    query: Any,
+    action: str,
+    window_id: str,
+    user_id: int,
+    thread_id: int,
+    context: Any,
+) -> None:
+    """Dispatch a validated, topic-scoped scenario action to its handler."""
     if action == "menu":
         await _open_menu(query, window_id)
     elif action == "sr":
         await _run_self_review(query, window_id, user_id, thread_id, context)
+    elif action == "cp":
+        await _run_commit_push(query, window_id, user_id, thread_id, context)
     elif action == "pr":
         await _ask_pr_number(query, window_id, user_id, thread_id, context)
 
@@ -344,6 +384,14 @@ async def _open_menu(query: Any, window_id: str) -> None:
     rows = [
         [InlineKeyboardButton("🔎 Self-review", callback_data=_encode("sr", window_id))]
     ]
+    if await _is_git_repo(window_id):
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    "💾 Commit & push", callback_data=_encode("cp", window_id)
+                )
+            ]
+        )
     if await _detect_pr_repo(window_id) is not None:
         rows.append(
             [
@@ -385,6 +433,25 @@ async def _run_self_review(
         bot=context.bot,
     )
     await query.answer("Self-review started")
+
+
+async def _run_commit_push(
+    query: Any, window_id: str, user_id: int, thread_id: int, context: Any
+) -> None:
+    note = (
+        "💾 Scenario triggered: Commit & push\n"
+        "Claude is reviewing the changes, writing a commit message, and pushing."
+    )
+    await _edit_to_note(query.message, note)
+    await _forward_scenario(
+        window_id=window_id,
+        user_id=user_id,
+        thread_id=thread_id,
+        prompt=_COMMIT_PUSH_PROMPT,
+        anchor=query.message,
+        bot=context.bot,
+    )
+    await query.answer("Commit & push started")
 
 
 async def _ask_pr_number(

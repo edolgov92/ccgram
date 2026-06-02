@@ -76,3 +76,13 @@ def test_launch_prompt_combines_tldr_and_progress() -> None:
 def test_progress_system_prompt_has_markers() -> None:
     assert tldr.PROGRESS_OPEN in tldr.PROGRESS_SYSTEM_PROMPT
     assert tldr.PROGRESS_CLOSE in tldr.PROGRESS_SYSTEM_PROMPT
+
+
+def test_progress_system_prompt_is_mandatory() -> None:
+    p = tldr.PROGRESS_SYSTEM_PROMPT
+    low = p.lower()
+    # Hard requirement, tied to every tool call — not soft "skip for trivial".
+    assert "required" in low
+    assert "must" in low
+    assert "before each tool call" in low
+    assert "never skip" in low

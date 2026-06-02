@@ -1,11 +1,14 @@
-"""Telegram Git/PR composer — branch, commit, push, open PR via buttons.
+"""Telegram Git/PR composer — create branch, open PR via buttons.
 
 Reached from the ⚙️ Settings menu's "Git / PR" button. Resolves the repo from
 the window's workspace/cwd and drives :mod:`ccgram_pro.git_ops` with friendly,
 button-first steps and one-line error surfacing. Free-text steps (branch name,
-commit message, PR title/body) are captured per-thread via
-:mod:`ccgram_pro.git_composer_state` and consumed by a high-priority message
-handler so they never reach the agent.
+PR title/body) are captured per-thread via :mod:`ccgram_pro.git_composer_state`
+and consumed by a high-priority message handler so they never reach the agent.
+
+Commit & push deliberately lives in the 🎬 Scenarios menu instead — it is driven
+by the agent (which writes a meaningful message and stages selectively), not by
+a mechanical add-all + auto-message path here.
 
 All git/gh calls are synchronous and run via ``asyncio.to_thread`` so the
 event loop is never blocked.
@@ -118,18 +121,13 @@ async def _render_menu(query: Any, repo: str) -> None:
     )
     text = f"🌿 *Git / PR*\n\n{header}\n📝 *Changes:* {changes}"
 
+    # Commit & push lives in the 🎬 Scenarios menu now — it's driven by the
+    # agent (Claude writes a meaningful message and stages selectively) rather
+    # than this mechanical add-all + auto-message path. The composer keeps the
+    # deterministic branch / PR plumbing.
     rows: list[list[Any]] = [
         [InlineKeyboardButton("🌱 Create branch", callback_data=f"{_CB_PREFIX}branch")]
     ]
-    if not status.clean:
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    "💾 Commit & push", callback_data=f"{_CB_PREFIX}commit"
-                )
-            ]
-        )
-    rows.append([InlineKeyboardButton("⬆️ Push", callback_data=f"{_CB_PREFIX}push")])
     rows.append([InlineKeyboardButton("🔀 Open PR", callback_data=f"{_CB_PREFIX}pr")])
     rows.append(
         [InlineKeyboardButton("🌐 Web composer", callback_data=f"{_CB_PREFIX}web")]
@@ -223,12 +221,6 @@ async def _route(
         await _create_suggested_branch(query, user_id, thread_id, repo)
     elif action == "branch_edit":
         await _arm_branch_edit(query, user_id, thread_id, window_id, repo)
-    elif action == "commit":
-        await _arm_commit(query, user_id, thread_id, window_id, repo)
-    elif action == "commit_auto":
-        await _commit_and_push(query, repo, message=None)
-    elif action == "push":
-        await _push(query, repo)
     elif action == "pr":
         await _start_pr(query, user_id, thread_id, window_id, repo)
     elif action == "pr_base":
@@ -332,98 +324,6 @@ async def _do_create_branch(
     gstate.disarm(user_id, thread_id)
     await query.answer(f"✅ {name}")
     await _safe_edit(query, f"✅ Created and checked out `{name}`.")
-
-
-# ── commit + push ─────────────────────────────────────────────────────────────
-
-
-async def _arm_commit(
-    query: Any, user_id: int, thread_id: int, window_id: str, repo: str
-) -> None:
-    # Lazy: PTB types only needed on the handler/send path.
-    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-
-    gstate.arm(
-        user_id,
-        thread_id,
-        gstate.ComposerInput(awaiting="commit_message", window_id=window_id, repo=repo),
-    )
-    kb = InlineKeyboardMarkup(
-        [
-            [
-                InlineKeyboardButton(
-                    "✨ Auto message", callback_data=f"{_CB_PREFIX}commit_auto"
-                )
-            ],
-            [InlineKeyboardButton("✖ Cancel", callback_data=f"{_CB_PREFIX}cancel")],
-        ]
-    )
-    await query.answer()
-    await _safe_edit(
-        query, "💾 Send a commit message, or tap *Auto message*.", reply_markup=kb
-    )
-
-
-async def _auto_commit_message(repo: str) -> str:
-    # Lazy: layer module deferred to the call path.
-    from .git_ops import working_tree_status
-
-    status = await asyncio.to_thread(working_tree_status, repo)
-    total = status.staged + status.unstaged + status.untracked
-    noun = "file" if total == 1 else "files"
-    return f"chore: update {total} {noun}"
-
-
-async def _commit_and_push(query: Any, repo: str, *, message: str | None) -> None:
-    # Lazy: layer module deferred to the call path.
-    from .git_ops import (
-        GitOpError,
-        NothingToCommit,
-        PushRejected,
-        commit_all,
-        push_branch,
-    )
-
-    msg = message or await _auto_commit_message(repo)
-    try:
-        sha = await asyncio.to_thread(commit_all, repo, msg)
-    except NothingToCommit:
-        await query.answer("Nothing to commit", show_alert=True)
-        return
-    except (GitOpError, ValueError) as exc:
-        await query.answer(_one_line(exc), show_alert=True)
-        return
-
-    try:
-        await asyncio.to_thread(push_branch, repo, set_upstream=True)
-    except PushRejected as exc:
-        await _safe_edit(query, f"✅ Committed `{sha[:7]}`.\n⬆️ {_one_line(exc)}")
-        await query.answer()
-        return
-    except GitOpError as exc:
-        await _safe_edit(
-            query, f"✅ Committed `{sha[:7]}`.\n❌ Push failed: {_one_line(exc)}"
-        )
-        await query.answer()
-        return
-    await query.answer("✅ Committed & pushed")
-    await _safe_edit(query, f"✅ Committed `{sha[:7]}` and pushed.")
-
-
-async def _push(query: Any, repo: str) -> None:
-    # Lazy: layer module deferred to the call path.
-    from .git_ops import GitOpError, PushRejected, push_branch
-
-    try:
-        await asyncio.to_thread(push_branch, repo, set_upstream=True)
-    except PushRejected as exc:
-        await query.answer(_one_line(exc), show_alert=True)
-        return
-    except GitOpError as exc:
-        await query.answer(f"Push failed: {_one_line(exc)}", show_alert=True)
-        return
-    await query.answer("✅ Pushed")
-    await _safe_edit(query, "⬆️ Pushed.")
 
 
 # ── pull request ──────────────────────────────────────────────────────────────
@@ -664,9 +564,6 @@ async def _handle_text_reply(
             )
             return
         await _create_branch_from_text(message, user_id, thread_id, pending, text)
-    elif pending.awaiting == "commit_message":
-        gstate.disarm(user_id, thread_id)
-        await _commit_and_push_msg(message, pending.repo, text)
     elif pending.awaiting == "pr_title":
         pending.pr_title = text[:256]
         pending.awaiting = "pr_body"
@@ -694,32 +591,6 @@ async def _create_branch_from_text(
     await message.reply_text(f"✅ Created and checked out `{name}`.")
 
 
-async def _commit_and_push_msg(message: Any, repo: str, msg: str) -> None:
-    # Lazy: layer module deferred to the call path.
-    from .git_ops import (
-        GitOpError,
-        NothingToCommit,
-        PushRejected,
-        commit_all,
-        push_branch,
-    )
-
-    try:
-        sha = await asyncio.to_thread(commit_all, repo, msg)
-    except NothingToCommit:
-        await message.reply_text("Nothing to commit.")
-        return
-    except (GitOpError, ValueError) as exc:
-        await message.reply_text(f"❌ {_one_line(exc)}")
-        return
-    try:
-        await asyncio.to_thread(push_branch, repo, set_upstream=True)
-    except (PushRejected, GitOpError) as exc:
-        await message.reply_text(f"✅ Committed `{sha[:7]}`.\n⬆️ {_one_line(exc)}")
-        return
-    await message.reply_text(f"✅ Committed `{sha[:7]}` and pushed.")
-
-
 # ── install ──────────────────────────────────────────────────────────────────
 
 
@@ -745,7 +616,7 @@ def install_git_composer(application: Any) -> None:
         group=-13,
     )
     _installed = True
-    logger.info("ccgram-pro git composer installed — branch/commit/push/PR")
+    logger.info("ccgram-pro git composer installed — branch + PR")
 
 
 def _reset_for_testing() -> None:
