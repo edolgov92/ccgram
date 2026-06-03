@@ -167,3 +167,66 @@ async def test_maybe_post_clean_releases_when_no_active_prompt(monkeypatch) -> N
     handled = await interactive_clean._maybe_post_clean(event, _Client())
     assert handled is False
     assert interactive_state.is_owned(7, 2) is False  # released → scraped UI fallback
+
+
+async def test_ensure_clean_prompt_posts_and_owns(monkeypatch) -> None:
+    question = AskQuestion(
+        tool_use_id="t1", question="Pick", options=["A", "B"], multi_select=False
+    )
+    _wire_clean(monkeypatch, ("ask", question))
+    posts: list = []
+
+    class _Client:
+        async def send_message(self, **kwargs):
+            posts.append(kwargs)
+            return SimpleNamespace(message_id=999)
+
+    ok = await interactive_clean.ensure_clean_prompt(
+        _Client(), user_id=7, thread_id=2, window_id="@1"
+    )
+    assert ok is True
+    assert posts and "Pick" in posts[0]["text"]
+    assert interactive_state.is_owned(7, 2) is True
+
+
+async def test_ensure_clean_prompt_idempotent_when_owned() -> None:
+    interactive_state.claim(7, 2)
+
+    class _Client:
+        async def send_message(self, **kwargs):
+            raise AssertionError("must not post when already owned")
+
+    ok = await interactive_clean.ensure_clean_prompt(
+        _Client(), user_id=7, thread_id=2, window_id="@1"
+    )
+    assert ok is True
+
+
+async def test_ensure_clean_prompt_false_for_non_clean(monkeypatch) -> None:
+    _wire_clean(monkeypatch, None)  # permission / non-clean prompt
+
+    class _Client:
+        async def send_message(self, **kwargs):
+            raise AssertionError("must not post for a non-clean prompt")
+
+    ok = await interactive_clean.ensure_clean_prompt(
+        _Client(), user_id=7, thread_id=2, window_id="@1"
+    )
+    assert ok is False
+    assert interactive_state.is_owned(7, 2) is False  # released → scraped fallback
+
+
+async def test_maybe_post_clean_skips_owned_binding(monkeypatch) -> None:
+    question = AskQuestion(
+        tool_use_id="t1", question="Pick", options=["A", "B"], multi_select=False
+    )
+    _wire_clean(monkeypatch, ("ask", question))
+    interactive_state.claim(7, 2)  # the poll-guard already handled this binding
+
+    class _Client:
+        async def send_message(self, **kwargs):
+            raise AssertionError("must not double-post an already-owned binding")
+
+    event = SimpleNamespace(window_key="sess:@1", data={"tool_name": ""})
+    handled = await interactive_clean._maybe_post_clean(event, _Client())
+    assert handled is True  # treated as handled (the guard posted it)

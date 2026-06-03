@@ -26,7 +26,7 @@ from . import interactive_state
 from ..share.links import make_plan_url
 from ..share.store import save_share
 from .interactive_drive import drive_cancel, drive_single_select
-from .plan_summary import condense_plan
+from .plan_summary import _first_idea, condense_plan
 
 logger = structlog.get_logger()
 
@@ -65,13 +65,17 @@ def _plan_keyboard(*, plan_url: str | None, window_id: str) -> Any:
 
 
 async def post_plan(
-    client: Any, users: list[tuple[int, int, str]], plan_md: str
+    client: Any, users: list[tuple[int, int, str]], plan_md: str, *, fast: bool = False
 ) -> set[tuple[int, int]]:
     """Condense the plan + post the approval card to each binding. Returns posted keys.
 
     Called by the unified interactive handler (``interactive_clean``), which has
     already claimed ownership + stopped the progress bubble. Condenses + stores
     the share once, then posts per binding.
+
+    ``fast`` uses the instant heuristic gist instead of the LLM condense (which
+    can take up to 5s) — the poll-tick guard passes ``fast=True`` so it never
+    stalls the 1s loop; the Notification path uses the polished LLM summary.
     """
     # Lazy: ccgram internal — deferred to avoid a bootstrap import cycle.
     from ccgram.config import config
@@ -80,7 +84,7 @@ async def post_plan(
     from ccgram.thread_router import thread_router
 
     window_id = users[0][2]
-    idea = await condense_plan(plan_md)
+    idea = _first_idea(plan_md) if fast else await condense_plan(plan_md)
     share_id = save_share(
         kind="plan",
         title=f"Plan · {window_id}",

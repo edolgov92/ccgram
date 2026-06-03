@@ -51,10 +51,27 @@ def _wrap_handle_interactive_ui(original: Any) -> Any:
         *args: Any,
         **kwargs: Any,
     ) -> bool:
-        if thread_id is not None and is_owned(user_id, thread_id):
-            # The clean keyboard owns this prompt — report "handled" so callers
-            # don't post the scraped UI or clear interactive mode.
-            return True
+        if thread_id is not None:
+            if is_owned(user_id, thread_id):
+                # The clean keyboard owns this prompt — report "handled" so
+                # callers don't post the scraped UI or clear interactive mode.
+                return True
+            # Not owned yet: try the clean UI FIRST so whichever path detects
+            # the prompt first (the 1s poll tick or the slower Notification
+            # hook) posts it — the scraped UI no longer wins the race. Falls
+            # through to the scraped UI for permission / non-clean prompts.
+            try:
+                # Lazy: avoid an import cycle (interactive_clean imports us).
+                from . import interactive_clean
+
+                if await interactive_clean.ensure_clean_prompt(
+                    client, user_id=user_id, thread_id=thread_id, window_id=window_id
+                ):
+                    return True
+            except Exception:  # noqa: BLE001 -- never lose the prompt
+                logger.warning(
+                    "clean interactive guard failed; using scraped UI", exc_info=True
+                )
         return await original(client, user_id, window_id, thread_id, *args, **kwargs)
 
     wrapped.__wrapped__ = original  # type: ignore[attr-defined]

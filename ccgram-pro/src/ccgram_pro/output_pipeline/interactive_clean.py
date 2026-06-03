@@ -190,14 +190,58 @@ async def _read_active_with_retry(transcript_path: str) -> tuple[str, object] | 
     return None
 
 
+async def _handle_prompt_for_users(
+    client: Any, users: list[tuple[int, int, str]], *, retry: bool, fast: bool = False
+) -> set[tuple[int, int]]:
+    """Claim ownership, read the live prompt, post clean Ask/Plan cards.
+
+    Claims for every binding BEFORE the read (closing the race with the scraped
+    UI), stops the progress bubble, posts the clean card, and releases any
+    binding we didn't post for so the scraped UI can fall back. ``retry`` waits
+    briefly for the transcript to flush — used by BOTH the poll-guard and the
+    Notification path so the read never misses a just-written tool_use. ``fast``
+    posts the plan with the instant heuristic gist (no LLM) so the poll tick is
+    never stalled by the condense call.
+    """
+    if not users:
+        return set()
+    window_id = users[0][2]
+    transcript_path = _resolve_transcript(window_id)
+    if not transcript_path:
+        return set()
+    for user_id, thread_id, _win in users:
+        interactive_state.claim(user_id, thread_id)
+    await _stop_progress_bubble(client, window_id)
+    posted_keys: set[tuple[int, int]] = set()
+    try:
+        active = (
+            await _read_active_with_retry(transcript_path)
+            if retry
+            else read_active_prompt(transcript_path)
+        )
+        if active is None:
+            return set()
+        kind, payload = active
+        if kind == "ask":
+            posted_keys = await _post_ask(client, users, payload)
+        elif kind == "plan":
+            posted_keys = await interactive_plan.post_plan(
+                client, users, str(payload), fast=fast
+            )
+        return posted_keys
+    finally:
+        for user_id, thread_id, _win in users:
+            if (user_id, thread_id) not in posted_keys:
+                interactive_state.release(user_id, thread_id)
+
+
 async def _maybe_post_clean(event: Any, client: Any) -> bool:
-    """Post the clean AskUserQuestion / plan card. Returns whether handled.
+    """Post the clean AskUserQuestion / plan card from the Notification hook.
 
     The kind is detected from the transcript (the hook's tool_name is empty for
-    every prompt). Ownership is claimed BEFORE the read so the scraped UI is
-    suppressed for the whole detection window — eliminating a double-post race.
-    The "Working…" spinner is stopped (Claude is now awaiting input). Any binding
-    we don't post a clean card for is released so the scraped UI falls back.
+    every prompt). Bindings the poll-guard already owns are skipped so the card
+    is never double-posted; the rest are handled with a short retry for the
+    transcript to flush.
     """
     # Lazy: ccgram internal — deferred to avoid a bootstrap import cycle.
     from ccgram.handlers.hook_events import _resolve_users_for_window_key
@@ -205,28 +249,31 @@ async def _maybe_post_clean(event: Any, client: Any) -> bool:
     users = _resolve_users_for_window_key(getattr(event, "window_key", "") or "")
     if not users:
         return False
-    window_id = users[0][2]
-    transcript_path = _resolve_transcript(window_id)
-    if not transcript_path:
-        return False
-    for user_id, thread_id, _win in users:
-        interactive_state.claim(user_id, thread_id)
-    await _stop_progress_bubble(client, window_id)
-    posted_keys: set[tuple[int, int]] = set()
-    try:
-        active = await _read_active_with_retry(transcript_path)
-        if active is None:
-            return False
-        kind, payload = active
-        if kind == "ask":
-            posted_keys = await _post_ask(client, users, payload)
-        elif kind == "plan":
-            posted_keys = await interactive_plan.post_plan(client, users, str(payload))
-        return bool(posted_keys)
-    finally:
-        for user_id, thread_id, _win in users:
-            if (user_id, thread_id) not in posted_keys:
-                interactive_state.release(user_id, thread_id)
+    fresh = [(u, t, w) for (u, t, w) in users if not interactive_state.is_owned(u, t)]
+    if not fresh:
+        return True  # already handled by the poll-guard path
+    return bool(await _handle_prompt_for_users(client, fresh, retry=True))
+
+
+async def ensure_clean_prompt(
+    client: Any, *, user_id: int, thread_id: int, window_id: str
+) -> bool:
+    """Poll-guard entry point: post the clean Ask/Plan card for one binding.
+
+    Lets whichever path detects the prompt FIRST — the 1s poll tick or the
+    (slower) Notification hook — trigger the clean UI, instead of only the hook
+    path. This is what stops the scraped UI from winning the race. Idempotent via
+    ownership. Returns True to suppress the scraped UI, False to let it through
+    (permission / non-clean prompts). Retries the (cheap, no-LLM) read so a
+    just-written tool_use isn't missed, and posts the plan with the instant
+    heuristic (``fast=True``) so the 1s poll tick is never stalled by the LLM.
+    """
+    if interactive_state.is_owned(user_id, thread_id):
+        return True
+    posted = await _handle_prompt_for_users(
+        client, [(user_id, thread_id, window_id)], retry=True, fast=True
+    )
+    return bool(posted)
 
 
 async def _wrapped_handle_notification(event: Any, client: Any) -> None:

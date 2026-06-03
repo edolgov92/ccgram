@@ -80,3 +80,33 @@ async def test_plan_callback_stale_alerts() -> None:
     q = _Query()
     await interactive_plan.handle_plan_callback(q, 7, 2, "ccgrampro:pl:a")
     assert q.answers and q.answers[-1][1].get("show_alert") is True
+
+
+async def test_post_plan_fast_skips_llm_condense(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    # If fast=True ever calls the (slow) LLM condense, fail loudly.
+    async def _boom(_md):
+        raise AssertionError("fast path must not call the LLM condense")
+
+    monkeypatch.setattr(interactive_plan, "condense_plan", _boom)
+    monkeypatch.setattr(interactive_plan, "save_share", lambda **k: "sid")
+    monkeypatch.setattr(interactive_plan, "make_plan_url", lambda **k: None)
+    import ccgram.thread_router as tr
+
+    monkeypatch.setattr(
+        tr, "thread_router", SimpleNamespace(resolve_chat_id=lambda u, t: 10)
+    )
+    posts: list = []
+
+    class _Client:
+        async def send_message(self, **kwargs):
+            posts.append(kwargs)
+            return SimpleNamespace(message_id=1)
+
+    plan_md = "# Build the widget\n\nWe add a widget to the dashboard."
+    keys = await interactive_plan.post_plan(
+        _Client(), [(7, 2, "@1")], plan_md, fast=True
+    )
+    assert keys == {(7, 2)}
+    assert posts and "Build the widget" in posts[0]["text"]
