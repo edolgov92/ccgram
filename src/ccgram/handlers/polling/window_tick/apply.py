@@ -335,6 +335,14 @@ async def _handle_dead_window_notification(
 ) -> None:
     if lifecycle_strategy.is_dead_notified(user_id, thread_id, wid):
         return
+    # The caller derives "dead" from a single per-cycle ``list_windows()``
+    # snapshot, which can transiently miss a live window under load (many
+    # windows / tmux busy). Re-verify with a direct lookup before declaring the
+    # session dead: a one-off snapshot miss must never post a spurious "ended"
+    # banner — and, via the dead-autoclose timer, ultimately destroy a working
+    # session. A genuinely-gone window stays gone here and is reported next tick.
+    if await tmux_manager.find_window_by_id(wid) is not None:
+        return
     terminal_poll_state.clear_seen_status(wid)
 
     clear_tool_msg_ids_for_topic(user_id, thread_id)

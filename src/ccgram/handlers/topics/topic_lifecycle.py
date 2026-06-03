@@ -47,7 +47,7 @@ async def check_autoclose_timers(client: TelegramClient) -> None:
         return
 
     now = time.monotonic()
-    expired: list[tuple[int, int]] = []
+    expired: list[tuple[int, int, str]] = []
     for user_id, thread_id, ts in all_topics:
         if ts.autoclose is None:
             continue
@@ -59,9 +59,24 @@ async def check_autoclose_timers(client: TelegramClient) -> None:
         else:
             continue
         if timeout > 0 and now - entered_at >= timeout:
-            expired.append((user_id, thread_id))
+            expired.append((user_id, thread_id, state))
 
-    for user_id, thread_id in expired:
+    for user_id, thread_id, state in expired:
+        # Guard the destructive "dead" autoclose: re-verify the window is really
+        # gone before deleting the topic. A false-dead (transient detection) must
+        # never auto-delete a live session's topic — if the window is alive,
+        # cancel the timer and resume normal tracking instead.
+        if state == "dead":
+            wid = thread_router.get_window_for_thread(user_id, thread_id)
+            if wid and await tmux_manager.find_window_by_id(wid) is not None:
+                lifecycle_strategy.clear_autoclose_timer(user_id, thread_id)
+                lifecycle_strategy.clear_dead_notification(user_id, thread_id)
+                logger.warning(
+                    "autoclose_dead_cancelled: window %s for thread %d is alive",
+                    wid,
+                    thread_id,
+                )
+                continue
         await _close_expired_topic(client, user_id, thread_id)
 
 

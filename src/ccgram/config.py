@@ -61,7 +61,7 @@ def _resolve_toolbar_path() -> str:
 class Config:
     """Application configuration loaded from environment variables."""
 
-    def __init__(self) -> None:
+    def __init__(self) -> None:  # noqa: PLR0915 -- config loader is a flat list of field inits
         self.config_dir = ccgram_dir()
         self.config_dir.mkdir(parents=True, exist_ok=True)
 

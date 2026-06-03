@@ -70,6 +70,56 @@ class TestCheckAutocloseTimers:
             await check_autoclose_timers(bot)
         bot.delete_forum_topic.assert_not_called()
 
+    async def test_expired_dead_topic_with_live_window_is_not_deleted(self):
+        # Defense-in-depth: a "dead" autoclose must re-verify the window is gone
+        # before deleting the topic. If the window is alive (false dead), cancel
+        # the autoclose + clear the dead mark instead of destroying the session.
+        bot = AsyncMock(spec=Bot)
+        bot.delete_forum_topic = AsyncMock()
+        user_id, thread_id = 1, 100
+        lifecycle_strategy.start_autoclose_timer(
+            user_id, thread_id, "dead", time.monotonic() - 99999
+        )
+        lifecycle_strategy.mark_dead_notified(user_id, thread_id, "@0")
+        with (
+            patch("ccgram.handlers.topics.topic_lifecycle.config") as mock_config,
+            patch(
+                "ccgram.handlers.topics.topic_lifecycle.thread_router"
+            ) as mock_router,
+            patch("ccgram.handlers.topics.topic_lifecycle.tmux_manager") as mock_tm,
+        ):
+            mock_config.autoclose_dead_minutes = 1
+            mock_router.get_window_for_thread.return_value = "@0"
+            mock_tm.find_window_by_id = AsyncMock(return_value=MagicMock())  # alive
+            await check_autoclose_timers(bot)
+        bot.delete_forum_topic.assert_not_called()
+        assert lifecycle_strategy.is_dead_notified(user_id, thread_id, "@0") is False
+
+    async def test_expired_dead_topic_with_gone_window_is_deleted(self):
+        bot = AsyncMock(spec=Bot)
+        bot.delete_forum_topic = AsyncMock()
+        user_id, thread_id = 1, 100
+        lifecycle_strategy.start_autoclose_timer(
+            user_id, thread_id, "dead", time.monotonic() - 99999
+        )
+        with (
+            patch("ccgram.handlers.topics.topic_lifecycle.config") as mock_config,
+            patch(
+                "ccgram.handlers.topics.topic_lifecycle.thread_router"
+            ) as mock_router,
+            patch("ccgram.handlers.topics.topic_lifecycle.tmux_manager") as mock_tm,
+            patch(
+                "ccgram.handlers.topics.topic_lifecycle.clear_topic_state",
+                new_callable=AsyncMock,
+            ),
+        ):
+            mock_config.autoclose_dead_minutes = 1
+            mock_router.resolve_chat_id.return_value = 42
+            mock_router.get_window_for_thread.return_value = "@0"
+            mock_tm.find_window_by_id = AsyncMock(return_value=None)  # really gone
+            await check_autoclose_timers(bot)
+        bot.delete_forum_topic.assert_called_once()
+
 
 def _window_view(origin: str) -> WindowView:
     return WindowView(

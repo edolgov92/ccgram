@@ -2086,10 +2086,12 @@ class TestDeadWindowNotification:
                 new_callable=AsyncMock,
                 return_value=True,
             ),
+            patch("ccgram.handlers.polling.window_tick.apply.tmux_manager") as mock_tm,
         ):
             mock_tr.resolve_chat_id.return_value = -100
             mock_tr.get_display_name.return_value = "test"
             mock_sm.view_window.return_value = MagicMock(cwd="/proj")
+            mock_tm.find_window_by_id = AsyncMock(return_value=None)  # confirmed gone
             await _handle_dead_window_notification(bot, 1, 42, "@5")
 
         assert (1, 42, "@5") in _dead_notified
@@ -2117,14 +2119,39 @@ class TestDeadWindowNotification:
                 new_callable=AsyncMock,
                 return_value=True,
             ),
+            patch("ccgram.handlers.polling.window_tick.apply.tmux_manager") as mock_tm,
         ):
             mock_tr.resolve_chat_id.return_value = -100
             mock_tr.get_display_name.return_value = "test"
             mock_sm.view_window.return_value = MagicMock(cwd="/proj")
+            mock_tm.find_window_by_id = AsyncMock(return_value=None)  # confirmed gone
             await _handle_dead_window_notification(bot, 1, 42, "@5")
             await _handle_dead_window_notification(bot, 1, 42, "@5")
 
         mock_send.assert_called_once()
+
+    async def test_skips_when_window_still_alive(self) -> None:
+        # Re-verify guard: a transient list_windows() miss must not "end" a live
+        # window. When a direct lookup finds it, no banner, no dead-notified mark.
+        bot = AsyncMock(spec=Bot)
+        with (
+            patch("ccgram.handlers.polling.window_tick.apply.thread_router"),
+            patch(
+                "ccgram.handlers.polling.window_tick.apply.rate_limit_send_message",
+                new_callable=AsyncMock,
+            ) as mock_send,
+            patch(
+                "ccgram.handlers.polling.window_tick.apply.update_topic_emoji",
+                new_callable=AsyncMock,
+            ) as mock_emoji,
+            patch("ccgram.handlers.polling.window_tick.apply.tmux_manager") as mock_tm,
+        ):
+            mock_tm.find_window_by_id = AsyncMock(return_value=MagicMock())  # alive
+            await _handle_dead_window_notification(bot, 1, 77, "@9")
+
+        mock_send.assert_not_called()
+        mock_emoji.assert_not_called()
+        assert (1, 77, "@9") not in _dead_notified
 
     @pytest.mark.parametrize(
         "error_msg",
