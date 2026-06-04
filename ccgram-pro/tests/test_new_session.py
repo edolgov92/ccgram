@@ -117,7 +117,9 @@ def test_build_keyboard_callback_data(projects_toml) -> None:
     assert "ccgrampro:new:effort:max" in datas
     assert "ccgrampro:new:mode:plan" in datas
     assert "ccgrampro:new:ws:clone" in datas
-    assert "ccgrampro:new:baseopen" in datas
+    assert "ccgrampro:new:basemode:default" in datas
+    assert "ccgrampro:new:basemode:current" in datas
+    assert "ccgrampro:new:basemode:custom" in datas
     assert "ccgrampro:new:start" in datas
     assert "ccgrampro:new:cancel" in datas
 
@@ -127,7 +129,7 @@ def test_build_keyboard_hides_git_rows_for_non_git(projects_toml) -> None:
     kb = new_session._build_keyboard(s)
     datas = [btn.callback_data for row in kb.inline_keyboard for btn in row]
     assert "ccgrampro:new:ws:worktree" not in datas
-    assert "ccgrampro:new:baseopen" not in datas
+    assert "ccgrampro:new:basemode:default" not in datas
     assert "ccgrampro:new:ws:clone" in datas
     assert "ccgrampro:new:ws:current" in datas
 
@@ -213,3 +215,151 @@ async def test_wrapped_unbound_shows_picker_when_unbound(
         assert calls and calls[0]["thread_id"] == 100
     finally:
         restore()
+
+
+# ── new-session modal rework: 2-col repos, base-mode row, branch status ──────
+
+
+def test_projects_laid_out_two_per_row(projects_toml) -> None:
+    s = _session()
+    kb = new_session._build_keyboard(s)
+    first_row = kb.inline_keyboard[0]
+    assert len(first_row) == 2
+    assert all(b.callback_data.startswith("ccgrampro:new:project:") for b in first_row)
+
+
+def test_base_mode_row_locks_default_when_dirty() -> None:
+    s = _session(project_is_git=True, default_branch_name="develop", is_dirty=True)
+    row = new_session._base_mode_row(s)
+    assert any("🔒" in b.text for b in row)
+    cbs = [b.callback_data for b in row]
+    assert "ccgrampro:new:basemode:default" in cbs
+    assert "ccgrampro:new:basemode:current" in cbs
+    assert "ccgrampro:new:basemode:custom" in cbs
+
+
+def test_base_mode_row_default_selectable_when_clean() -> None:
+    s = _session(
+        project_is_git=True,
+        default_branch_name="develop",
+        is_dirty=False,
+        has_unpushed=False,
+        base_mode="default",
+    )
+    default_btn = new_session._base_mode_row(s)[0]
+    assert "🔒" not in default_btn.text
+    assert "develop" in default_btn.text
+    assert default_btn.text.startswith("● ")
+
+
+def test_render_text_shows_dirty_unpushed_branch_status() -> None:
+    s = _session(
+        project_is_git=True,
+        current_branch_name="feature/x",
+        is_dirty=True,
+        has_unpushed=True,
+        default_branch_name="develop",
+    )
+    text = new_session._render_text(s)
+    assert "feature/x" in text
+    assert "uncommitted" in text
+    assert "unpushed" in text
+
+
+def test_render_text_clean_branch_default_base() -> None:
+    s = _session(
+        project_is_git=True,
+        current_branch_name="main",
+        is_dirty=False,
+        has_unpushed=False,
+        default_branch_name="main",
+        base_mode="default",
+    )
+    text = new_session._render_text(s)
+    assert "clean" in text
+    assert "switch + pull" in text
+
+
+def test_effective_base_branch() -> None:
+    assert (
+        new_session._effective_base_branch(
+            _session(base_mode="default", default_branch_name="develop")
+        )
+        == "develop"
+    )
+    assert new_session._effective_base_branch(_session(base_mode="current")) is None
+    assert (
+        new_session._effective_base_branch(
+            _session(base_mode="custom", base_branch="feat/x")
+        )
+        == "feat/x"
+    )
+
+
+async def test_resolve_project_git_promotes_to_default_when_clean(
+    projects_toml, monkeypatch
+) -> None:
+    monkeypatch.setattr(
+        new_session,
+        "_probe_git",
+        lambda path: {
+            "is_git": True,
+            "current": "feature",
+            "default": "develop",
+            "dirty": False,
+            "unpushed": False,
+        },
+    )
+    s = _session()
+    await new_session._resolve_project_git(s)
+    assert s.base_mode == "default"
+    assert s.default_branch_name == "develop"
+
+
+async def test_resolve_project_git_stays_current_when_dirty(
+    projects_toml, monkeypatch
+) -> None:
+    monkeypatch.setattr(
+        new_session,
+        "_probe_git",
+        lambda path: {
+            "is_git": True,
+            "current": "feature",
+            "default": "develop",
+            "dirty": True,
+            "unpushed": False,
+        },
+    )
+    s = _session()
+    await new_session._resolve_project_git(s)
+    assert s.base_mode == "current"
+
+
+class _BaseQuery:
+    def __init__(self) -> None:
+        self.answers: list[Any] = []
+        self.edits: list[str] = []
+
+    async def answer(self, text: str = "", **kw: Any) -> None:
+        self.answers.append((text, kw))
+
+    async def edit_message_text(self, *, text: str, **kw: Any) -> None:
+        self.edits.append(text)
+
+
+async def test_select_base_mode_default_blocked_when_dirty() -> None:
+    s = _session(project_is_git=True, default_branch_name="develop", is_dirty=True)
+    q = _BaseQuery()
+    await new_session._select_base_mode(q, s, "default")
+    assert s.base_mode != "default"  # rejected
+    assert q.answers and q.answers[-1][1].get("show_alert") is True
+
+
+async def test_select_base_mode_current_sets_mode() -> None:
+    s = _session(
+        project_is_git=True, default_branch_name="develop", base_mode="default"
+    )
+    q = _BaseQuery()
+    await new_session._select_base_mode(q, s, "current")
+    assert s.base_mode == "current"
+    assert s.base_branch is None

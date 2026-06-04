@@ -192,6 +192,49 @@ def _radio_row(options: list[tuple[str, str]], selected: str, action: str) -> li
     ]
 
 
+def _base_mode_row(session: store.PendingSession) -> list[Any]:
+    """The base row: [default branch | current branch | custom].
+
+    The "default branch" cell is locked (🔒) when the current branch has
+    uncommitted or unpushed changes — switching branches then would be unsafe.
+    "Custom" opens the branch picker; its label shows the chosen branch.
+    """
+    # Lazy: PTB types only needed on the handler/send path.
+    from telegram import InlineKeyboardButton
+
+    blocked = session.is_dirty or session.has_unpushed
+    default_name = session.default_branch_name or "default"
+    if blocked or not session.default_branch_name:
+        default_btn = InlineKeyboardButton(
+            f"🔒 {default_name}"[:30],
+            callback_data=f"{_CB_PREFIX}basemode:default",
+        )
+    else:
+        mark = "● " if session.base_mode == "default" else ""
+        default_btn = InlineKeyboardButton(
+            f"{mark}⎇ {default_name}"[:30],
+            callback_data=f"{_CB_PREFIX}basemode:default",
+        )
+
+    cur_mark = "● " if session.base_mode == "current" else ""
+    cur_btn = InlineKeyboardButton(
+        f"{cur_mark}Current",
+        callback_data=f"{_CB_PREFIX}basemode:current",
+    )
+
+    custom_mark = "● " if session.base_mode == "custom" else ""
+    custom_label = (
+        session.base_branch
+        if session.base_mode == "custom" and session.base_branch
+        else "Custom"
+    )
+    custom_btn = InlineKeyboardButton(
+        f"{custom_mark}{custom_label}"[:30],
+        callback_data=f"{_CB_PREFIX}basemode:custom",
+    )
+    return [default_btn, cur_btn, custom_btn]
+
+
 def _build_keyboard(session: store.PendingSession) -> Any:
     # Lazy: PTB types only needed on the handler/send path.
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
@@ -202,16 +245,17 @@ def _build_keyboard(session: store.PendingSession) -> Any:
     projects = load_projects()
     rows: list[list[Any]] = []
 
-    for idx, project in enumerate(projects):
-        mark = "🟢 " if idx == session.project_idx else "📁 "
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    f"{mark}{project.label}"[:60],
-                    callback_data=f"{_CB_PREFIX}project:{idx}",
-                )
-            ]
+    # Projects laid out two-per-row (the toml order groups them: HP | HP,
+    # Homedea | Homedea, …, ccgram). A trailing odd project gets its own row.
+    project_buttons = [
+        InlineKeyboardButton(
+            f"{'🟢 ' if idx == session.project_idx else '📁 '}{project.label}"[:60],
+            callback_data=f"{_CB_PREFIX}project:{idx}",
         )
+        for idx, project in enumerate(projects)
+    ]
+    for i in range(0, len(project_buttons), 2):
+        rows.append(project_buttons[i : i + 2])
 
     rows.append(
         _radio_row([(k, label) for k, label, _m in _MODELS], session.model_key, "model")
@@ -227,15 +271,7 @@ def _build_keyboard(session: store.PendingSession) -> Any:
     rows.append(_radio_row(ws_options, session.workspace_strategy, "ws"))
 
     if session.project_is_git:
-        base_label = session.base_branch or "(current)"
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    f"⎇ Base: {base_label} ▸",
-                    callback_data=f"{_CB_PREFIX}baseopen",
-                )
-            ]
-        )
+        rows.append(_base_mode_row(session))
 
     rows.append(
         [
@@ -312,7 +348,6 @@ def _render_text(session: store.PendingSession) -> str:
             f"Pick the branch to start *{project_label}* from, "
             "or keep the current branch."
         )
-    base_label = session.base_branch or "(current)"
     lines = [
         "*🆕 New session*\n",
         "Pick your options, then tap *Start session*.\n",
@@ -323,7 +358,23 @@ def _render_text(session: store.PendingSession) -> str:
         f"🗂 *Workspace:* {ws_label}",
     ]
     if session.project_is_git:
-        lines.append(f"⎇ *Base:* {base_label}")
+        cur = session.current_branch_name or "?"
+        flags = []
+        if session.is_dirty:
+            flags.append("uncommitted")
+        if session.has_unpushed:
+            flags.append("unpushed")
+        status = "✅ clean" if not flags else "⚠️ " + " + ".join(flags)
+        lines.append(f"⎇ *Branch:* {cur} — {status}")
+        if session.base_mode == "default":
+            base_desc = (
+                f"default → {session.default_branch_name or '?'} (switch + pull)"
+            )
+        elif session.base_mode == "custom":
+            base_desc = session.base_branch or "custom"
+        else:
+            base_desc = f"current ({cur})"
+        lines.append(f"⎇ *Base:* {base_desc}")
     return "\n".join(lines)
 
 
@@ -370,8 +421,43 @@ def _default_plan_mode() -> bool:
     return load_settings().defaults.plan_mode_on_new_session
 
 
+def _probe_git(path: Path | str) -> dict[str, Any]:
+    """Synchronously probe the project's git status for the picker.
+
+    Fully local (``allow_remote=False`` for default-branch detection) so building
+    the card never blocks on the network. Run via ``asyncio.to_thread``.
+    """
+    # Lazy: layer git helpers deferred to the call path.
+    from .git_ops import (
+        GitOpError,
+        current_branch,
+        default_branch,
+        has_uncommitted_changes,
+        has_unpushed_commits,
+        is_git_repo,
+    )
+
+    if not is_git_repo(path):
+        return {"is_git": False}
+    info: dict[str, Any] = {
+        "is_git": True,
+        "current": None,
+        "default": None,
+        "dirty": False,
+        "unpushed": False,
+    }
+    try:
+        info["current"] = current_branch(path)
+        info["dirty"] = has_uncommitted_changes(path)
+        info["unpushed"] = has_unpushed_commits(path)
+        info["default"] = default_branch(path, allow_remote=False)
+    except (GitOpError, OSError) as exc:
+        logger.debug("git probe partial failure for %s: %s", path, exc)
+    return info
+
+
 async def _resolve_project_git(session: store.PendingSession) -> None:
-    """Cache whether the selected project is a git work tree."""
+    """Cache the selected project's git-ness + branch status; pick a base mode."""
     projects = load_projects()
     if not (0 <= session.project_idx < len(projects)):
         session.project_is_git = False
@@ -379,13 +465,22 @@ async def _resolve_project_git(session: store.PendingSession) -> None:
     # Lazy: only needed in this branch.
     import asyncio
 
-    # Lazy: layer module deferred to the call path.
-    from .git_ops import is_git_repo
-
     path = projects[session.project_idx].path
-    session.project_is_git = await asyncio.to_thread(is_git_repo, path)
+    info = await asyncio.to_thread(_probe_git, path)
+    session.project_is_git = bool(info.get("is_git"))
+    session.current_branch_name = info.get("current")
+    session.default_branch_name = info.get("default")
+    session.is_dirty = bool(info.get("dirty"))
+    session.has_unpushed = bool(info.get("unpushed"))
     if not session.project_is_git and session.workspace_strategy == "worktree":
         session.workspace_strategy = "current"
+    # Default base mode: switch to the repo's default branch — but fall back to
+    # "current" when that's blocked (dirty/unpushed tree, or no detectable default).
+    if session.base_mode != "custom":
+        blocked = session.is_dirty or session.has_unpushed
+        session.base_mode = (
+            "default" if (session.default_branch_name and not blocked) else "current"
+        )
 
 
 # ── callback handling ───────────────────────────────────────────────────────
@@ -464,6 +559,7 @@ async def _apply_selection(
             session.base_branch = None
             session.branch_choices = []
             session.base_page = 0
+            session.base_mode = "default"  # recomputed by _resolve_project_git
             await _resolve_project_git(session)
     elif action.startswith("model:"):
         key = action.split(":", 1)[1]
@@ -482,6 +578,9 @@ async def _apply_selection(
         allowed = _WORKSPACE_KEYS if session.project_is_git else _NON_GIT_WORKSPACES
         if key in allowed:
             session.workspace_strategy = key
+    elif action.startswith("basemode:"):
+        await _select_base_mode(query, session, action.split(":", 1)[1])
+        return
     elif action.startswith("basepage:"):
         try:
             session.base_page = max(0, int(action.split(":", 1)[1]))
@@ -524,8 +623,51 @@ async def _open_base_view(query: Any, session: store.PendingSession) -> None:
     await _safe_rerender(query, session)
 
 
+def _effective_base_branch(session: store.PendingSession) -> str | None:
+    """The branch name the chosen base mode resolves to (None = stay current)."""
+    if session.base_mode == "default":
+        return session.default_branch_name
+    if session.base_mode == "custom":
+        return session.base_branch
+    return None
+
+
+async def _select_base_mode(
+    query: Any, session: store.PendingSession, mode: str
+) -> None:
+    """Apply a base-mode tap. 'custom' opens the branch picker; the rest set+rerender."""
+    if mode == "default":
+        if session.is_dirty or session.has_unpushed:
+            await query.answer(
+                "Commit, stash, or push your changes first — can't switch to the "
+                "default branch with uncommitted/unpushed work.",
+                show_alert=True,
+            )
+            return
+        if not session.default_branch_name:
+            await query.answer(
+                "No default branch detected for this repo.", show_alert=True
+            )
+            return
+        session.base_mode = "default"
+        session.base_branch = None
+        await query.answer()
+        await _safe_rerender(query, session)
+    elif mode == "current":
+        session.base_mode = "current"
+        session.base_branch = None
+        await query.answer()
+        await _safe_rerender(query, session)
+    elif mode == "custom":
+        await _open_base_view(query, session)
+    else:
+        await query.answer("unknown base mode")
+
+
 async def _select_base(query: Any, session: store.PendingSession, token: str) -> None:
     if token == _CB_BASE_CURRENT:
+        # The "(current branch)" row inside the picker == the Current base mode.
+        session.base_mode = "current"
         session.base_branch = None
     else:
         try:
@@ -535,6 +677,7 @@ async def _select_base(query: Any, session: store.PendingSession, token: str) ->
             return
         if 0 <= idx < len(session.branch_choices):
             session.base_branch = session.branch_choices[idx]
+            session.base_mode = "custom"
     session.viewing_base = False
     await query.answer()
     await _safe_rerender(query, session)
@@ -721,7 +864,7 @@ async def _finalize_start(
         sidecar.reasoning = session.effort_key
         sidecar.mode = session.mode
         sidecar.workspace_strategy = session.workspace_strategy
-        sidecar.base_branch = session.base_branch
+        sidecar.base_branch = _effective_base_branch(session)
         sidecar.plan_mode = "entered" if session.mode == "plan" else "skipped"
         # Record the source repo so teardown can run git worktree-remove / drop
         # snapshot refs against the right repository for clone/worktree sessions.
@@ -742,12 +885,13 @@ async def _finalize_start(
     store.clear(session.chat_id, session.thread_id)
     await _capture_session_anchor(created_wid)
     logger.info(
-        "new-session started: window=%s project=%s mode=%s workspace=%s base=%s",
+        "new-session started: window=%s project=%s mode=%s workspace=%s base=%s(%s)",
         created_wid,
         repo,
         session.mode,
         session.workspace_strategy,
-        session.base_branch or "(current)",
+        session.base_mode,
+        _effective_base_branch(session) or "current",
     )
     return created_wid
 
@@ -785,6 +929,74 @@ class _StartError(RuntimeError):
     """A one-line, user-facing reason the session could not start."""
 
 
+async def _provision_current(session: store.PendingSession, repo: Path) -> None:
+    """Apply the chosen base mode to the current repo before launch.
+
+    - ``default`` → check out the repo's default branch (re-detect if needed)
+      and fast-forward pull. Refuses on a dirty tree (the picker already blocks
+      this, but we re-check at the source of truth).
+    - ``custom`` → check out the picked branch (refuses on a dirty tree).
+    - ``current`` → stay; best-effort fast-forward pull that never fails Start.
+    """
+    # Lazy: only needed in this branch.
+    import asyncio
+
+    # Lazy: layer git helpers deferred to the call path.
+    from .git_ops import (
+        GitOpError,
+        checkout,
+        current_branch,
+        default_branch,
+        has_uncommitted_changes,
+        pull_ff_only,
+    )
+
+    if session.base_mode == "default":
+        target = session.default_branch_name or await asyncio.to_thread(
+            default_branch, repo
+        )
+        if not target:
+            raise _StartError("Couldn't detect the repo's default branch.")
+        if await asyncio.to_thread(has_uncommitted_changes, repo):
+            raise _StartError(
+                "Working tree has uncommitted changes — commit/stash, or pick the "
+                "current branch."
+            )
+        try:
+            cur = await asyncio.to_thread(current_branch, repo)
+            if target != cur:
+                await asyncio.to_thread(checkout, repo, target)
+            await asyncio.to_thread(pull_ff_only, repo)
+        except GitOpError as exc:
+            raise _StartError(
+                f"Could not switch to {target!r} and pull: {str(exc).splitlines()[0]}"
+            ) from exc
+        return
+
+    if session.base_mode == "custom" and session.base_branch:
+        try:
+            cur = await asyncio.to_thread(current_branch, repo)
+            if session.base_branch != cur:
+                if await asyncio.to_thread(has_uncommitted_changes, repo):
+                    raise _StartError(
+                        "Working tree has uncommitted changes — commit/stash, or "
+                        "pick the current branch."
+                    )
+                await asyncio.to_thread(checkout, repo, session.base_branch)
+        except GitOpError as exc:
+            raise _StartError(
+                f"Could not switch to {session.base_branch!r}: "
+                f"{str(exc).splitlines()[0]}"
+            ) from exc
+        return
+
+    # "current" (or custom with no branch): stay; best-effort sync the branch.
+    try:
+        await asyncio.to_thread(pull_ff_only, repo)
+    except GitOpError as exc:
+        logger.debug("current-branch pull skipped: %s", str(exc).splitlines()[0])
+
+
 async def _provision_cwd(
     session: store.PendingSession, project: Any, repo: Path
 ) -> Path:
@@ -794,28 +1006,7 @@ async def _provision_cwd(
 
     strategy = session.workspace_strategy
     if strategy == "current":
-        if session.base_branch:
-            # Lazy: layer module deferred to the call path.
-            from .git_ops import (
-                GitOpError,
-                checkout,
-                current_branch,
-                has_uncommitted_changes,
-            )
-
-            try:
-                cur = await asyncio.to_thread(current_branch, repo)
-                if session.base_branch != cur:
-                    if await asyncio.to_thread(has_uncommitted_changes, repo):
-                        raise _StartError(
-                            "Working tree has uncommitted changes — commit/stash, "
-                            "or pick the current branch."
-                        )
-                    await asyncio.to_thread(checkout, repo, session.base_branch)
-            except GitOpError as exc:
-                raise _StartError(
-                    f"Could not switch to {session.base_branch!r}: {str(exc).splitlines()[0]}"
-                ) from exc
+        await _provision_current(session, repo)
         return repo
 
     if strategy == "worktree":
@@ -830,7 +1021,7 @@ async def _provision_cwd(
 
         branch = await asyncio.to_thread(suggest_branch_name, session.first_text, repo)
         wt_path = worktree_path_for(repo, slug_for_path(branch))
-        base_ref = session.base_branch or "HEAD"
+        base_ref = _effective_base_branch(session) or "HEAD"
         try:
             await asyncio.to_thread(
                 create_worktree, repo, branch, wt_path, base_ref=base_ref
@@ -855,13 +1046,14 @@ async def _provision_cwd(
         raise _StartError(
             f"Could not provision workspace: {str(exc).splitlines()[0]}"
         ) from exc
-    if session.base_branch:
+    clone_base = _effective_base_branch(session)
+    if clone_base:
         try:
-            await asyncio.to_thread(checkout, dest, session.base_branch)
+            await asyncio.to_thread(checkout, dest, clone_base)
         except GitOpError as exc:
             _cleanup_clone(dest)
             raise _StartError(
-                f"Clone could not switch to {session.base_branch!r}: {str(exc).splitlines()[0]}"
+                f"Clone could not switch to {clone_base!r}: {str(exc).splitlines()[0]}"
             ) from exc
     return dest
 

@@ -52,6 +52,73 @@ def checkout(repo: Path | str, ref: str) -> None:
     run_git(repo, "checkout", ref)
 
 
+def default_branch(repo: Path | str, *, allow_remote: bool = True) -> str | None:
+    """Best-effort resolve the remote's default branch (``main``/``develop``/…).
+
+    Order: the local ``origin/HEAD`` symbolic ref (instant), then — only when
+    *allow_remote* is set — a networked ``ls-remote --symref`` (authoritative),
+    then a local-name heuristic. Pass ``allow_remote=False`` on latency-sensitive
+    paths (e.g. building the picker) to stay fully local. Returns None when
+    nothing resolves (e.g. no remote).
+    """
+    res = run_git(
+        repo,
+        "symbolic-ref",
+        "--quiet",
+        "--short",
+        "refs/remotes/origin/HEAD",
+        check=False,
+    )
+    if res.returncode == 0 and res.stdout.strip():
+        # "origin/main" → "main"
+        return res.stdout.strip().split("/", 1)[-1]
+
+    if allow_remote:
+        res = run_git(repo, "ls-remote", "--symref", "origin", "HEAD", check=False)
+        if res.returncode == 0:
+            for line in res.stdout.splitlines():
+                line = line.strip()
+                if line.startswith("ref:") and "HEAD" in line:
+                    # "ref: refs/heads/develop\tHEAD" → "develop"
+                    return line.split()[1].rsplit("/", 1)[-1]
+
+    for name in ("main", "develop", "master"):
+        res = run_git(repo, "rev-parse", "--verify", "--quiet", name, check=False)
+        if res.returncode == 0:
+            return name
+    return None
+
+
+def has_unpushed_commits(repo: Path | str) -> bool:
+    """True when the current branch is ahead of its upstream (unpushed commits).
+
+    False when there's no upstream (can't compare — don't over-report) or when
+    the branch is in sync. Never raises.
+    """
+    upstream = run_git(
+        repo,
+        "rev-parse",
+        "--abbrev-ref",
+        "--symbolic-full-name",
+        "@{u}",
+        check=False,
+    )
+    if upstream.returncode != 0:
+        return False
+    ahead = run_git(repo, "rev-list", "--count", "@{u}..HEAD", check=False)
+    if ahead.returncode != 0:
+        return False
+    try:
+        return int(ahead.stdout.strip()) > 0
+    except ValueError:
+        return False
+
+
+def pull_ff_only(repo: Path | str) -> None:
+    """``git pull --ff-only`` — raises :class:`GitOpError` if not fast-forwardable."""
+    run_git(repo, "pull", "--ff-only")
+
+
 def create_branch(
     repo: Path | str, name: str, *, from_ref: str = "HEAD", checkout: bool = True
 ) -> None:

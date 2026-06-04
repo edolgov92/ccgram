@@ -15,7 +15,10 @@ from .branch import (
     checkout,
     create_branch,
     current_branch,
+    default_branch,
+    has_unpushed_commits,
     list_branches,
+    pull_ff_only,
     push_branch,
 )
 from .commit import NothingToCommit, commit_all
@@ -81,6 +84,9 @@ __all__ = [
     "create_branch",
     "create_pull_request",
     "current_branch",
+    "default_branch",
+    "has_unpushed_commits",
+    "pull_ff_only",
     "delete_window_snapshots",
     "diff_between",
     "file_content_at",

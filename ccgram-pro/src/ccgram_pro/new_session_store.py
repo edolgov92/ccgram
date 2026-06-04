@@ -45,9 +45,21 @@ class PendingSession:
     effort_key: str = _DEFAULT_EFFORT
     mode: str = "coding"  # "coding" | "plan"
     workspace_strategy: str = "current"  # "current" | "worktree" | "clone"
-    base_branch: str | None = None
+    # Base selection mode: "default" (switch to the repo's default branch + pull),
+    # "current" (stay on the current branch), or "custom" (a branch the user picks
+    # from the list — held in ``base_branch``). The safe baseline is "current";
+    # ``_resolve_project_git`` PROMOTES it to "default" when a default branch is
+    # detected and the tree is clean (so the picker opens on "default" as desired).
+    base_mode: str = "current"
+    base_branch: str | None = None  # the picked branch when base_mode == "custom"
     branch_choices: list[str] = field(default_factory=list)
     base_page: int = 0
+    # Cached git status of the selected project's CURRENT checkout (computed on
+    # create / project change) so the keyboard + summary never shell out per tap.
+    current_branch_name: str | None = None
+    default_branch_name: str | None = None
+    is_dirty: bool = False  # uncommitted changes (staged/unstaged/untracked)
+    has_unpushed: bool = False  # current branch ahead of its upstream
     # Cached git-ness of the selected project (computed on create / project
     # change) so the keyboard render doesn't shell out on every tap.
     project_is_git: bool = True
