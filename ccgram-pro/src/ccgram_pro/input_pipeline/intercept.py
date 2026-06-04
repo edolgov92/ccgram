@@ -203,24 +203,20 @@ async def _wrapped_forward_message(
         )
         # Lazy: progress_bubble is part of the output pipeline; deferring
         # the import keeps the input package free of an extra cross-edge.
-        from ..config import load_settings
-
-        # Lazy: deferred to avoid a heavy/cyclic import at module load.
         from ..output_pipeline import progress_bubble
 
-        # Lazy: deferred to avoid a heavy/cyclic import at module load.
-        from .silencer_guard import is_silent_for_window
-
-        if load_settings().defaults.progress_bubble and is_silent_for_window(window_id):
-            bot = message.get_bot() if hasattr(message, "get_bot") else None
-            if bot is not None:
-                await progress_bubble.start_bubble(
-                    window_id=window_id,
-                    bot=bot,
-                    chat_id=message.chat.id,
-                    thread_id=thread_id,
-                    transcript_path=_resolve_transcript_path(window_id),
-                )
+        # begin_for_turn does the progress-bubble + silent-mode gating and
+        # resolves chat_id from the topic binding; the message chat is only a
+        # last-resort fallback (it can be missing/stale).
+        bot = message.get_bot() if hasattr(message, "get_bot") else None
+        fallback_chat_id = getattr(getattr(message, "chat", None), "id", None)
+        await progress_bubble.begin_for_turn(
+            window_id=window_id,
+            user_id=user_id,
+            thread_id=thread_id,
+            bot=bot,
+            fallback_chat_id=fallback_chat_id,
+        )
         return
     # No ack reaction on the user's batched message — the layer keeps the chat
     # free of bot-authored emoji (see silencer reactions suppression). The batch

@@ -285,6 +285,64 @@ def test_commit_push_prompt_content() -> None:
     assert "push" in low
 
 
+async def test_menu_shows_sync_main_for_git_repo(monkeypatch) -> None:
+    _own(monkeypatch)
+    _detect(monkeypatch, None)
+    _git_repo(monkeypatch, True)
+    msg = _Msg()
+    update = _callback_update("ccgrampro:scn:menu:@5", msg)
+    with pytest.raises(ApplicationHandlerStop):
+        await scn.handle_scenarios_callback(update, SimpleNamespace(bot=_Bot()))
+    cbs = [
+        b.callback_data
+        for row in msg.replies[0]["reply_markup"].inline_keyboard
+        for b in row
+    ]
+    assert "ccgrampro:scn:sm:@5" in cbs
+
+
+async def test_menu_hides_sync_main_for_non_git_dir(monkeypatch) -> None:
+    _own(monkeypatch)
+    _detect(monkeypatch, None)
+    _git_repo(monkeypatch, False)
+    msg = _Msg()
+    update = _callback_update("ccgrampro:scn:menu:@5", msg)
+    with pytest.raises(ApplicationHandlerStop):
+        await scn.handle_scenarios_callback(update, SimpleNamespace(bot=_Bot()))
+    cbs = [
+        b.callback_data
+        for row in msg.replies[0]["reply_markup"].inline_keyboard
+        for b in row
+    ]
+    assert "ccgrampro:scn:sm:@5" not in cbs
+
+
+async def test_sync_main_forwards_prompt(monkeypatch) -> None:
+    _own(monkeypatch)
+    forwarded = _stub_forward(monkeypatch)
+    _stub_bubble(monkeypatch)
+    msg = _Msg()
+    update = _callback_update("ccgrampro:scn:sm:@5", msg)
+    with pytest.raises(ApplicationHandlerStop):
+        await scn.handle_scenarios_callback(update, SimpleNamespace(bot=_Bot()))
+    assert msg.edits and "Sync main branch" in msg.edits[0]["text"]
+    assert forwarded == [("@5", 7, 2, scn._SYNC_MAIN_PROMPT)]
+
+
+def test_sync_main_prompt_content() -> None:
+    p = scn._SYNC_MAIN_PROMPT
+    low = p.lower()
+    # Detects the real default branch (develop for backend, not just "main").
+    assert "develop" in low
+    assert "remote show origin" in low or "symbolic-ref" in low
+    # Safe: fast-forward only, never clobber uncommitted work.
+    assert "--ff-only" in p
+    assert "stop" in low and ("dirty" in low or "uncommitted" in low)
+    assert "do not stash" in low or "not stash" in low
+    # Codec accepts the new action.
+    assert scn._decode(scn._encode("sm", "@5")) == ("sm", "@5")
+
+
 async def test_menu_rejects_foreign_user(monkeypatch) -> None:
     _own(monkeypatch, val=False)
     msg = _Msg()

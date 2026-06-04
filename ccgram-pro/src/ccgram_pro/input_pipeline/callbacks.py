@@ -101,31 +101,39 @@ async def _do_flush(
         )
     except Exception:  # noqa: BLE001 -- surface a useful toast no matter what
         logger.exception("batch flush failed for window %s", window_id)
-        await query.answer("Send failed — see logs", show_alert=True)
+        # Lazy: contextlib only needed on this error path.
+        import contextlib
+
+        # Lazy: PTB error type only needed on this error path.
+        from telegram.error import TelegramError
+
+        with contextlib.suppress(TelegramError):
+            await query.answer("Send failed — see logs", show_alert=True)
         return
 
-    # Keep the chat clean: delete the batch status message rather than leaving
-    # a "Sent N items" notification. The user's own messages keep their read
-    # reaction; Claude's reply follows.
-    await _delete_status(query, user_id, thread_id)
-
-    # Kick off the live "⚙️ Working on your request…" bubble (on by default) so
-    # the user sees Claude's progress notes grow until the final summary posts.
-    # Lazy: deferred to avoid a heavy/cyclic import at module load.
-    from ..config import load_settings
-
+    # Kick off the live "⚙️ Working on your request…" bubble FIRST — before the
+    # status-message cleanup — so a stale callback (an expired query.answer in
+    # _delete_status) can never abort the flow before the bubble is posted. This
+    # is exactly the regression that silently dropped the "processing" status:
+    # the batch sat a few minutes, the callback expired, _delete_status raised,
+    # and begin_for_turn never ran. chat_id is resolved from the topic binding
+    # inside begin_for_turn (never the stale query), so it doesn't need the query.
     # Lazy: deferred to avoid a heavy/cyclic import at module load.
     from ..output_pipeline import progress_bubble
 
-    chat_id = query.message.chat.id if query.message else None
-    if chat_id is not None and load_settings().defaults.progress_bubble:
-        await progress_bubble.start_bubble(
-            window_id=window_id,
-            bot=context.bot,
-            chat_id=chat_id,
-            thread_id=thread_id,
-            transcript_path=intercept._resolve_transcript_path(window_id),
-        )
+    fallback_chat_id = query.message.chat.id if query.message else None
+    await progress_bubble.begin_for_turn(
+        window_id=window_id,
+        user_id=user_id,
+        thread_id=thread_id,
+        bot=context.bot,
+        fallback_chat_id=fallback_chat_id,
+    )
+
+    # Keep the chat clean: delete the batch status message rather than leaving
+    # a "Sent N items" notification. The user's own messages keep their read
+    # reaction; Claude's reply follows. Best-effort — never raises (see below).
+    await _delete_status(query, user_id, thread_id)
 
 
 async def _do_clear(query: Any, user_id: int, thread_id: int) -> None:
@@ -166,4 +174,8 @@ async def _delete_status(
     intercept.clear_status_message(user_id, thread_id)  # forget tracked id
     with contextlib.suppress(TelegramError):
         await query.message.delete()
-    await query.answer(toast)
+    # query.answer can raise "query is too old" when the batch sat a while before
+    # Send — suppress it; this is best-effort cleanup and must never abort the
+    # caller (it used to skip the progress bubble that runs after it).
+    with contextlib.suppress(TelegramError):
+        await query.answer(toast)

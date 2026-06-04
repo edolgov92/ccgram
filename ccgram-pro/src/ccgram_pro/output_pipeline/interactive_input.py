@@ -1,4 +1,4 @@
-"""Read structured interactive-prompt data from the transcript tail.
+"""Read structured interactive-prompt data from the transcript tail (or pane).
 
 Claude Code's ``AskUserQuestion`` and ``ExitPlanMode`` tools carry their full
 input in the JSONL transcript (the ``Notification`` hook only gives us the tool
@@ -8,10 +8,17 @@ Telegram keyboard — one button per option — instead of screen-scraping the T
 We reuse :func:`transcript_events.extract_events` (which preserves ``tool_input``
 for ``tool_use`` blocks) and return the most recent UN-answered prompt — a
 ``tool_use`` whose ``tool_use_id`` has no matching ``tool_result`` yet.
+
+Newer Claude Code builds render some ``AskUserQuestion`` prompts WITHOUT writing
+a corresponding ``tool_use`` to the transcript — the question exists only in the
+rendered TUI. :func:`parse_pane_prompt` recovers those by parsing the live pane,
+gated on ccgram's own UI classifier tagging the region as ``AskUserQuestion`` so
+permission prompts / plans / settings are left to their proper handlers.
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from .transcript_events import extract_events
@@ -100,3 +107,86 @@ def read_active_prompt(transcript_path: str) -> tuple[str, object] | None:
         # Newest tool_use is some other tool (permission-gated) — not our prompt.
         return None
     return None
+
+
+# ── Pane fallback: AskUserQuestion that never reaches the transcript ────────
+
+# A numbered option row, optionally cursor-marked (❯ / › / >).
+_OPTION_RE = re.compile(r"^\s*[❯›>]?\s*(\d+)[.)]\s+(\S.*)$")
+# The question header line begins with a checkbox glyph (single- or multi-tab).
+_HEADER_RE = re.compile(r"^\s*←?\s*[☐✔☒▣▢]\s*(.+)$")
+# A horizontal rule / blank-ish chrome line to skip while reading the preamble.
+_RULE_RE = re.compile(r"^[\s─—\-_·•]*$")
+# Footer wording hinting at multi-select (Space toggles rows).
+_MULTI_RE = re.compile(r"(?i)\bspace\b.*\b(toggle|select)\b|\btoggle\b")
+# A lone numbered line is almost certainly a misparse, not a real choice menu.
+_MIN_MENU_OPTIONS = 2
+
+
+def _parse_menu_block(block: str) -> AskQuestion | None:
+    """Parse a numbered selection menu (question + options) from pane text."""
+    lines = block.split("\n")
+    options: list[str] = []
+    first_opt_idx: int | None = None
+    for i, line in enumerate(lines):
+        m = _OPTION_RE.match(line)
+        if m:
+            if first_opt_idx is None:
+                first_opt_idx = i
+            label = m.group(2).strip()
+            if label:
+                options.append(label)
+    # Require a real choice menu — a lone option is almost certainly a misparse.
+    if first_opt_idx is None or len(options) < _MIN_MENU_OPTIONS:
+        return None
+
+    # Everything above the first option is the prompt text. The checkbox-glyph
+    # line is the short header/tab label; the remaining lines are the question
+    # body, wrapped by the terminal — rejoin them into one paragraph.
+    header_parts: list[str] = []
+    body_parts: list[str] = []
+    for line in lines[:first_opt_idx]:
+        stripped = line.strip()
+        if not stripped or _RULE_RE.match(stripped):
+            continue
+        head = _HEADER_RE.match(stripped)
+        if head and head.group(1).strip():
+            header_parts.append(head.group(1).strip())
+        else:
+            body_parts.append(stripped)
+    header = " ".join(header_parts).strip()
+    body = " ".join(body_parts).strip()
+    if header and body:
+        question = f"{header}\n\n{body}"
+    else:
+        question = body or header or "Choose an option"
+
+    return AskQuestion(
+        tool_use_id="",
+        question=question,
+        options=options,
+        multi_select=bool(_MULTI_RE.search(block)),
+        total=1,
+    )
+
+
+def parse_pane_prompt(pane_text: str) -> tuple[str, object] | None:
+    """Recover an active AskUserQuestion straight from the rendered TUI pane.
+
+    Used as a fallback when :func:`read_active_prompt` finds nothing in the
+    transcript (newer Claude Code builds don't always record the question as a
+    ``tool_use``). To stay safe, we only parse when ccgram's own UI classifier
+    tags the region as ``AskUserQuestion`` — permission prompts, plans, settings
+    and other selectors classify differently and are left to their handlers.
+    """
+    if not pane_text or not pane_text.strip():
+        return None
+    # Lazy: ccgram's terminal parser classifies + isolates the UI region; the
+    # top-level import would couple this transcript reader to core's bootstrap.
+    from ccgram.terminal_parser import extract_interactive_content
+
+    content = extract_interactive_content(pane_text)
+    if content is None or content.name != "AskUserQuestion":
+        return None
+    parsed = _parse_menu_block(content.content)
+    return ("ask", parsed) if parsed else None

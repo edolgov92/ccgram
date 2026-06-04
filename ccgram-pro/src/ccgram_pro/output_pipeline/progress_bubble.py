@@ -223,6 +223,81 @@ async def _clear_persisted_bubble(window_id: str) -> None:
         state.save(sidecar)
 
 
+def _resolve_chat_id(user_id: int, thread_id: int) -> int | None:
+    """Resolve the chat id from the topic binding (the canonical source).
+
+    Deliberately NOT derived from a callback/message object — those go stale
+    (an expired callback query, a deleted status message) and silently yield no
+    chat, which is exactly how the progress bubble went missing. The binding is
+    always correct for a bound topic.
+    """
+    # Lazy: thread_router is the canonical topic→chat resolver.
+    from ccgram.thread_router import thread_router
+
+    try:
+        chat_id = thread_router.resolve_chat_id(user_id, thread_id)
+    except RuntimeError, KeyError, ValueError:
+        return None
+    return chat_id or None
+
+
+def _resolve_transcript(window_id: str) -> str | None:
+    # Lazy: window_query pulls in the query layer.
+    from ccgram.window_query import view_window
+
+    try:
+        view = view_window(window_id)
+    except RuntimeError:
+        return None
+    if view and view.transcript_path:
+        return str(view.transcript_path)
+    return None
+
+
+async def begin_for_turn(
+    *,
+    window_id: str,
+    user_id: int,
+    thread_id: int,
+    bot: Any,
+    fallback_chat_id: int | None = None,
+) -> None:
+    """Single, robust entry point for starting the bubble on a new turn.
+
+    Both the batched-flush and the direct-forward paths route through here so
+    the gating + chat resolution are identical and never depend on a (possibly
+    stale) callback message. No-op when progress bubbles are disabled or the
+    window isn't layer-silent (core streams its own UI in that case).
+    """
+    if bot is None:
+        return
+    # Lazy: layer config — deferred to avoid a heavy import at module load.
+    from ..config import load_settings
+
+    if not load_settings().defaults.progress_bubble:
+        return
+    # Lazy: only own the in-chat UX for layer-managed (silent) windows.
+    from ..input_pipeline.silencer_guard import is_silent_for_window
+
+    if not is_silent_for_window(window_id):
+        return
+    chat_id = _resolve_chat_id(user_id, thread_id) or fallback_chat_id
+    if chat_id is None:
+        logger.debug(
+            "progress bubble: no chat_id for window %s thread %s — skipped",
+            window_id,
+            thread_id,
+        )
+        return
+    await start_bubble(
+        window_id=window_id,
+        bot=bot,
+        chat_id=chat_id,
+        thread_id=thread_id,
+        transcript_path=_resolve_transcript(window_id),
+    )
+
+
 async def start_bubble(
     *,
     window_id: str,
@@ -271,15 +346,21 @@ async def start_bubble(
 
 
 async def finalize_bubble(
-    window_id: str, bot: Any, *, header: str = _DONE_HEADER
+    window_id: str,
+    bot: Any,
+    *,
+    header: str = _DONE_HEADER,
+    keep_when_empty: bool = False,
 ) -> None:
     """Stop the tick loop and finalize the bubble.
 
-    KEEP it (relabel header + show the bullet history) only when Claude actually
-    emitted progress notes — that record is the bubble's whole point. When there
-    are NO bullets the message is just noise ("✅ Completed" with nothing under
-    it), so DELETE it instead. Falls back to the sidecar coordinates (delete)
-    when the in-memory entry was lost across a restart.
+    With bullets, KEEP it (relabel header + show the bullet history) — that
+    record is the bubble's whole point. With NO bullets the "✅ Completed"
+    message would be noise next to the summary that follows, so DELETE it —
+    UNLESS ``keep_when_empty`` is set, which the interactive transition uses so
+    "⏳ Awaiting your answer…" stays visible (the agent is blocked on the user;
+    there is no summary coming to signal that). Falls back to the sidecar
+    coordinates (delete) when the in-memory entry was lost across a restart.
     """
     bubble = _bubbles.pop(window_id, None)
     if bubble is not None:
@@ -290,7 +371,7 @@ async def finalize_bubble(
         with contextlib.suppress(Exception):
             await _refresh_bullets(bubble)
         with contextlib.suppress(Exception):
-            if bubble.bullets:
+            if bubble.bullets or keep_when_empty:
                 await bot.edit_message_text(
                     chat_id=bubble.chat_id,
                     message_id=bubble.message_id,
@@ -349,9 +430,12 @@ async def stop_for_interactive(window_id: str, bot: Any) -> None:
 
     Called when an AskUserQuestion / ExitPlanMode prompt is surfaced — the spinner
     must stop (Claude is blocked on the user, not working) so it never hangs on
-    "Working…" while a question is pending or after it's dismissed.
+    "Working…" while a question is pending or after it's dismissed. KEEP it even
+    with no progress notes — "⏳ Awaiting your answer…" is the signal that the
+    turn finished and the agent is now waiting on the user (no summary follows
+    to convey that), so deleting it would leave the user with no status at all.
     """
-    await finalize_bubble(window_id, bot, header=_WAITING_HEADER)
+    await finalize_bubble(window_id, bot, header=_WAITING_HEADER, keep_when_empty=True)
 
 
 def is_active(window_id: str) -> bool:

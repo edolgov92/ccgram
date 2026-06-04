@@ -118,3 +118,64 @@ def test_active_prompt_none_for_permission_tool(tmp_path: Path) -> None:
 def test_active_prompt_none_when_answered(tmp_path: Path) -> None:
     path = _write(tmp_path, _ask("t1", ["A", "B"]), _result("t1"))
     assert interactive_input.read_active_prompt(path) is None
+
+
+_PANE_ASK = (
+    "  The reset is the start of the ISO week.\n"
+    " ☐ Reset wording\n"
+    "\n"
+    "The reset is actually the start of Monday (UTC), not Sunday midnight. How should\n"
+    " I word the tooltip?\n"
+    "\n"
+    "❯ 1. Resets every Monday\n"
+    "     Accurate to the ISO-week start.\n"
+    "  2. Resets weekly\n"
+    "     Vaguer but safe.\n"
+    "  3. Drop the reset sentence\n"
+    "  4. Keep Sunday midnight\n"
+    "  5. Type something.\n"
+    "  6. Chat about this\n"
+    "\n"
+    "Enter to select · ↑/↓ to navigate · Esc to cancel\n"
+)
+
+_PANE_PERMISSION = (
+    "Do you want to make this edit to reward.ts?\n"
+    "❯ 1. Yes\n"
+    "  2. Yes, and don't ask again\n"
+    "  3. No\n"
+    "\n"
+    "Esc to cancel\n"
+)
+
+
+def test_parse_pane_prompt_extracts_question_and_options() -> None:
+    active = interactive_input.parse_pane_prompt(_PANE_ASK)
+    assert active is not None and active[0] == "ask"
+    q = active[1]
+    assert q.options == [
+        "Resets every Monday",
+        "Resets weekly",
+        "Drop the reset sentence",
+        "Keep Sunday midnight",
+        "Type something.",
+        "Chat about this",
+    ]
+    assert q.multi_select is False
+    assert q.tool_use_id == ""
+
+
+def test_parse_pane_prompt_joins_wrapped_question_body() -> None:
+    q = interactive_input.parse_pane_prompt(_PANE_ASK)[1]
+    assert "Reset wording" in q.question
+    assert "How should I word the tooltip?" in q.question
+    assert "How should\n I word" not in q.question
+
+
+def test_parse_pane_prompt_ignores_permission_prompt() -> None:
+    assert interactive_input.parse_pane_prompt(_PANE_PERMISSION) is None
+
+
+def test_parse_pane_prompt_empty_is_none() -> None:
+    assert interactive_input.parse_pane_prompt("") is None
+    assert interactive_input.parse_pane_prompt("just some output\n") is None

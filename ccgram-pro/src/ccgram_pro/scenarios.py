@@ -8,10 +8,14 @@ prompt to the bound agent exactly as a normal user turn — bypassing the batche
 via the original (pre-wrap) forward captured by :mod:`input_pipeline.intercept`
 — then starts the live progress bubble.
 
-Two scenarios ship today:
+Scenarios shipping today:
 
 - **Self-review** (every session): a deep self-review checklist over the last,
   unpushed changes.
+- **Commit & push** (git repos): review, write a message, push the branch.
+- **Sync main branch** (git repos): switch to the repo's default branch
+  (``develop`` for the humanprogram backend, ``main``/``master`` elsewhere — read
+  from the remote) and fast-forward pull; refuses to clobber uncommitted work.
 - **PR auto-fixer** (humanprogram backend/app only): drives the repo's
   ``var/pr-check.sh`` loop to address CI + Cursor-bot feedback until the PR is
   green. It needs one input — the PR number — collected through a free-text
@@ -144,6 +148,17 @@ Please commit the current changes and push them.
 When done, report the exact commit message you used and the push result (branch + remote)."""
 
 
+_SYNC_MAIN_PROMPT = """\
+Please switch to the repository's default (main) branch and pull the latest changes.
+
+- First determine the default branch from the REMOTE — it is NOT always "main". Read it from `git remote show origin` (the "HEAD branch:" line) or `git symbolic-ref refs/remotes/origin/HEAD`. For this project's humanprogram backend the default branch is `develop`; for most repos it's `main` or `master`. Use whatever the remote actually reports.
+- Before switching, check `git status`. If the working tree is dirty — staged, unstaged, OR untracked changes that matter — STOP and tell me. Do NOT stash, discard, reset, or force anything; I will decide what to do with the in-progress work.
+- If the working tree is clean, check out the default branch and pull with fast-forward only (`git pull --ff-only`). If a fast-forward is not possible, STOP and tell me rather than merging or rebasing.
+- If you are inside a git worktree and the default branch is already checked out in another worktree, STOP and tell me instead of forcing it.
+
+When done, report which branch you are now on and what was pulled (e.g. "develop — fast-forwarded 12 commits" or "main — already up to date")."""
+
+
 # ── callback codec (window_id is the trailing, colon-safe field) ───────────────
 
 
@@ -156,7 +171,7 @@ def _decode(data: str) -> tuple[str, str] | None:
     if not data.startswith(_CB_PREFIX):
         return None
     action, _, window_id = data[len(_CB_PREFIX) :].partition(":")
-    if action not in ("menu", "sr", "cp", "pr", "x") or not window_id:
+    if action not in ("menu", "sr", "cp", "sm", "pr", "x") or not window_id:
         return None
     return action, window_id
 
@@ -269,27 +284,16 @@ async def _forward_scenario(
 
     # Live "⚙️ Working on your request…" bubble (mirrors the batch-flush path).
     # Lazy: deferred to avoid a heavy/cyclic import at module load.
-    from .config import load_settings
-
-    # Lazy: deferred to avoid a heavy/cyclic import at module load.
-    from .input_pipeline.silencer_guard import is_silent_for_window
-
-    # Lazy: deferred to avoid a heavy/cyclic import at module load.
     from .output_pipeline import progress_bubble
 
-    chat_id = getattr(getattr(anchor, "chat", None), "id", None)
-    if (
-        chat_id is not None
-        and load_settings().defaults.progress_bubble
-        and is_silent_for_window(window_id)
-    ):
-        await progress_bubble.start_bubble(
-            window_id=window_id,
-            bot=bot,
-            chat_id=chat_id,
-            thread_id=thread_id,
-            transcript_path=intercept._resolve_transcript_path(window_id),
-        )
+    fallback_chat_id = getattr(getattr(anchor, "chat", None), "id", None)
+    await progress_bubble.begin_for_turn(
+        window_id=window_id,
+        user_id=user_id,
+        thread_id=thread_id,
+        bot=bot,
+        fallback_chat_id=fallback_chat_id,
+    )
 
 
 async def _edit_to_note(message: Any, text: str) -> None:
@@ -367,6 +371,8 @@ async def _route_topic_action(
         await _run_self_review(query, window_id, user_id, thread_id, context)
     elif action == "cp":
         await _run_commit_push(query, window_id, user_id, thread_id, context)
+    elif action == "sm":
+        await _run_sync_main(query, window_id, user_id, thread_id, context)
     elif action == "pr":
         await _ask_pr_number(query, window_id, user_id, thread_id, context)
 
@@ -389,6 +395,13 @@ async def _open_menu(query: Any, window_id: str) -> None:
             [
                 InlineKeyboardButton(
                     "💾 Commit & push", callback_data=_encode("cp", window_id)
+                )
+            ]
+        )
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    "🔄 Sync main branch", callback_data=_encode("sm", window_id)
                 )
             ]
         )
@@ -452,6 +465,26 @@ async def _run_commit_push(
         bot=context.bot,
     )
     await query.answer("Commit & push started")
+
+
+async def _run_sync_main(
+    query: Any, window_id: str, user_id: int, thread_id: int, context: Any
+) -> None:
+    note = (
+        "🔄 Scenario triggered: Sync main branch\n"
+        "Switching to the repo's default branch (develop/main) and pulling the "
+        "latest — will stop and ask if there are uncommitted changes."
+    )
+    await _edit_to_note(query.message, note)
+    await _forward_scenario(
+        window_id=window_id,
+        user_id=user_id,
+        thread_id=thread_id,
+        prompt=_SYNC_MAIN_PROMPT,
+        anchor=query.message,
+        bot=context.bot,
+    )
+    await query.answer("Sync started")
 
 
 async def _ask_pr_number(
@@ -631,7 +664,10 @@ def install_scenarios(application: Any) -> None:
         group=-12,
     )
     _installed = True
-    logger.info("ccgram-pro scenarios installed — self-review + PR auto-fixer")
+    logger.info(
+        "ccgram-pro scenarios installed — self-review + commit/push + sync-main "
+        "+ PR auto-fixer"
+    )
 
 
 def _reset_for_testing() -> None:

@@ -18,6 +18,7 @@ same callback prefix.)
 from __future__ import annotations
 
 import asyncio
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -29,7 +30,7 @@ from .interactive_drive import (
     drive_multi_select,
     drive_single_select,
 )
-from .interactive_input import read_active_prompt
+from .interactive_input import parse_pane_prompt, read_active_prompt
 
 logger = structlog.get_logger()
 
@@ -40,6 +41,10 @@ AQ_PREFIX = "ccgrampro:aq:"
 _RETRY_ATTEMPTS = 3
 _RETRY_DELAY = 0.25
 _MAX_BUTTON_LABEL = 60
+# How long to stop trying to post to a topic Telegram reported as gone. The
+# topic-probe should reap the stale binding; until it does, this keeps the 1s
+# poll tick from driving a doomed send_message on every cycle.
+_GONE_THREAD_COOLDOWN = 120.0
 
 
 @dataclass
@@ -61,6 +66,25 @@ def _qa_record(question: str, answer_line: str) -> str:
 
 # (user_id, thread_id) -> the live AskUserQuestion prompt awaiting a tap.
 _pending_asks: dict[tuple[int, int], _PendingAsk] = {}
+
+# (user_id, thread_id) -> monotonic deadline; while in the future we skip posting
+# to a topic Telegram reported gone (deleted/closed) so a stale binding doesn't
+# drive a doomed send_message every poll tick.
+_gone_thread_until: dict[tuple[int, int], float] = {}
+
+
+def _mark_thread_gone(user_id: int, thread_id: int) -> None:
+    _gone_thread_until[(user_id, thread_id)] = time.monotonic() + _GONE_THREAD_COOLDOWN
+
+
+def _thread_recently_gone(user_id: int, thread_id: int) -> bool:
+    until = _gone_thread_until.get((user_id, thread_id))
+    if until is None:
+        return False
+    if time.monotonic() >= until:
+        _gone_thread_until.pop((user_id, thread_id), None)
+        return False
+    return True
 
 
 def _question_keyboard(
@@ -110,6 +134,12 @@ async def _post_question(
     if q.total > 1:
         header = f"{header}\n\n(Question 1 of {q.total} — the rest follow.)"
     keyboard = _question_keyboard(q.options, q.multi_select, set())
+    # Lazy: PTB error type only needed on the send path.
+    from telegram.error import TelegramError
+
+    # Lazy: core's stale-binding classifier — deferred to avoid a bootstrap cycle.
+    from ccgram.handlers.messaging_pipeline.message_sender import is_thread_gone
+
     try:
         sent = await client.send_message(
             chat_id=chat_id,
@@ -118,6 +148,18 @@ async def _post_question(
             reply_markup=keyboard,
             disable_notification=True,
         )
+    except TelegramError as e:
+        # A deleted/closed topic is a stale binding the topic-probe will reap —
+        # a transient race, not an error worth a WARNING (it would repeat every
+        # poll tick until cleanup). Stay quiet and fall back to the scraped UI.
+        if is_thread_gone(e):
+            _mark_thread_gone(user_id, thread_id)
+            logger.debug(
+                "clean AskUserQuestion target topic is gone", window_id=window_id
+            )
+        else:
+            logger.warning("failed to post clean AskUserQuestion", exc_info=True)
+        return False
     except Exception:  # noqa: BLE001 -- fall back to the scraped UI on any failure
         logger.warning("failed to post clean AskUserQuestion", exc_info=True)
         return False
@@ -190,6 +232,28 @@ async def _read_active_with_retry(transcript_path: str) -> tuple[str, object] | 
     return None
 
 
+async def _read_active_from_pane(window_id: str) -> tuple[str, object] | None:
+    """Fallback read: parse a new-format AskUserQuestion from the live pane.
+
+    Newer Claude Code builds render some questions only in the TUI — they never
+    land in the transcript — so the transcript read misses them. The pane is the
+    sole source of truth there. ``parse_pane_prompt`` self-gates on ccgram's UI
+    classifier, so this only fires for genuine AskUserQuestion menus.
+    """
+    # Lazy: tmux_manager is the live tmux session wrapper.
+    from ccgram.tmux_manager import tmux_manager
+
+    try:
+        if await tmux_manager.find_window_by_id(window_id) is None:
+            return None
+        pane_text = await tmux_manager.capture_pane(window_id)
+    except OSError:
+        return None
+    if not pane_text:
+        return None
+    return parse_pane_prompt(pane_text)
+
+
 async def _handle_prompt_for_users(
     client: Any, users: list[tuple[int, int, str]], *, retry: bool, fast: bool = False
 ) -> set[tuple[int, int]]:
@@ -207,18 +271,22 @@ async def _handle_prompt_for_users(
         return set()
     window_id = users[0][2]
     transcript_path = _resolve_transcript(window_id)
-    if not transcript_path:
-        return set()
     for user_id, thread_id, _win in users:
         interactive_state.claim(user_id, thread_id)
     await _stop_progress_bubble(client, window_id)
     posted_keys: set[tuple[int, int]] = set()
     try:
-        active = (
-            await _read_active_with_retry(transcript_path)
-            if retry
-            else read_active_prompt(transcript_path)
-        )
+        active: tuple[str, object] | None = None
+        if transcript_path:
+            active = (
+                await _read_active_with_retry(transcript_path)
+                if retry
+                else read_active_prompt(transcript_path)
+            )
+        if active is None:
+            # The transcript has no live prompt — but newer AskUserQuestion menus
+            # render only in the TUI. Parse the pane before giving up.
+            active = await _read_active_from_pane(window_id)
         if active is None:
             return set()
         kind, payload = active
@@ -249,9 +317,13 @@ async def _maybe_post_clean(event: Any, client: Any) -> bool:
     users = _resolve_users_for_window_key(getattr(event, "window_key", "") or "")
     if not users:
         return False
-    fresh = [(u, t, w) for (u, t, w) in users if not interactive_state.is_owned(u, t)]
+    fresh = [
+        (u, t, w)
+        for (u, t, w) in users
+        if not interactive_state.is_owned(u, t) and not _thread_recently_gone(u, t)
+    ]
     if not fresh:
-        return True  # already handled by the poll-guard path
+        return True  # already handled by the poll-guard path (or topic is gone)
     return bool(await _handle_prompt_for_users(client, fresh, retry=True))
 
 
@@ -269,6 +341,10 @@ async def ensure_clean_prompt(
     heuristic (``fast=True``) so the 1s poll tick is never stalled by the LLM.
     """
     if interactive_state.is_owned(user_id, thread_id):
+        return True
+    if _thread_recently_gone(user_id, thread_id):
+        # Topic is gone — there's nowhere to post. Report handled so the scraped
+        # UI isn't driven to a doomed post either; we re-check after the cooldown.
         return True
     posted = await _handle_prompt_for_users(
         client, [(user_id, thread_id, window_id)], retry=True, fast=True
@@ -416,5 +492,6 @@ def _reset_for_testing() -> None:
     global _installed
     _installed = False
     _pending_asks.clear()
+    _gone_thread_until.clear()
     interactive_state._reset_for_testing()
     interactive_plan._reset_for_testing()

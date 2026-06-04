@@ -130,6 +130,13 @@ def _wire_clean(monkeypatch, active) -> None:
     monkeypatch.setattr(interactive_clean, "_RETRY_ATTEMPTS", 1)
     monkeypatch.setattr(interactive_clean, "_RETRY_DELAY", 0.0)
     monkeypatch.setattr(interactive_clean, "read_active_prompt", lambda path: active)
+
+    async def _no_pane(window_id):
+        return None
+
+    # Neutralize the live-pane fallback by default so transcript-driven tests
+    # don't reach real tmux; pane-specific tests override this.
+    monkeypatch.setattr(interactive_clean, "_read_active_from_pane", _no_pane)
     # thread_router proxy is unwired in isolated tests — replace the module attr.
     monkeypatch.setattr(
         tr, "thread_router", SimpleNamespace(resolve_chat_id=lambda u, t: 10)
@@ -214,6 +221,67 @@ async def test_ensure_clean_prompt_false_for_non_clean(monkeypatch) -> None:
     )
     assert ok is False
     assert interactive_state.is_owned(7, 2) is False  # released → scraped fallback
+
+
+async def test_pane_fallback_posts_when_transcript_empty(monkeypatch) -> None:
+    _wire_clean(monkeypatch, None)  # transcript records no AskUserQuestion tool_use
+    question = AskQuestion(
+        tool_use_id="",
+        question="Reset wording",
+        options=["Resets every Monday", "Resets weekly", "Drop it"],
+        multi_select=False,
+    )
+
+    async def fake_pane(window_id):
+        return ("ask", question)
+
+    monkeypatch.setattr(interactive_clean, "_read_active_from_pane", fake_pane)
+    posts: list = []
+
+    class _Client:
+        async def send_message(self, **kwargs):
+            posts.append(kwargs)
+            return SimpleNamespace(message_id=999)
+
+    ok = await interactive_clean.ensure_clean_prompt(
+        _Client(), user_id=7, thread_id=2, window_id="@1"
+    )
+    assert ok is True
+    assert posts and "Reset wording" in posts[0]["text"]
+    assert interactive_state.is_owned(7, 2) is True
+
+
+async def test_gone_thread_cooldown_stops_doomed_reposts(monkeypatch) -> None:
+    from telegram.error import BadRequest
+
+    _wire_clean(monkeypatch, None)  # transcript empty; pane drives detection
+    question = AskQuestion(
+        tool_use_id="", question="Q", options=["A", "B"], multi_select=False
+    )
+
+    async def fake_pane(window_id):
+        return ("ask", question)
+
+    monkeypatch.setattr(interactive_clean, "_read_active_from_pane", fake_pane)
+    sends: list = []
+
+    class _Client:
+        async def send_message(self, **kwargs):
+            sends.append(kwargs)
+            raise BadRequest("Message thread not found")
+
+    ok1 = await interactive_clean.ensure_clean_prompt(
+        _Client(), user_id=7, thread_id=2, window_id="@1"
+    )
+    assert ok1 is False  # nothing posted (topic gone) → scraped fallback this once
+    assert len(sends) == 1
+    assert interactive_state.is_owned(7, 2) is False
+
+    ok2 = await interactive_clean.ensure_clean_prompt(
+        _Client(), user_id=7, thread_id=2, window_id="@1"
+    )
+    assert ok2 is True  # in cooldown → suppress, no second doomed send
+    assert len(sends) == 1
 
 
 async def test_maybe_post_clean_skips_owned_binding(monkeypatch) -> None:

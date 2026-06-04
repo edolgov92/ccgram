@@ -121,14 +121,77 @@ async def test_finalize_when_no_active() -> None:
     bot.delete_message.assert_not_called()
 
 
-async def test_stop_for_interactive_deletes_empty_bubble() -> None:
+async def test_stop_for_interactive_keeps_awaiting_bubble() -> None:
     bot = _make_bot()
     await progress_bubble.start_bubble(window_id="@1", bot=bot, chat_id=1, thread_id=1)
     await progress_bubble.stop_for_interactive("@1", bot)
     assert not progress_bubble.is_active("@1")
-    # Question surfaced with no progress notes → drop the empty spinner.
-    bot.delete_message.assert_awaited_once()
-    bot.edit_message_text.assert_not_called()
+    # Question surfaced — KEEP a visible "Awaiting your answer" status even with
+    # no progress notes (no summary follows to tell the user the turn ended).
+    bot.delete_message.assert_not_called()
+    final_text = bot.edit_message_text.await_args.kwargs["text"]
+    assert "Awaiting your answer" in final_text
+
+
+async def test_finalize_keeps_empty_when_flag_set() -> None:
+    bot = _make_bot()
+    await progress_bubble.start_bubble(window_id="@1", bot=bot, chat_id=1, thread_id=1)
+    await progress_bubble.finalize_bubble("@1", bot, keep_when_empty=True)
+    bot.delete_message.assert_not_called()
+    bot.edit_message_text.assert_awaited()
+
+
+async def test_begin_for_turn_resolves_chat_from_binding(monkeypatch) -> None:
+    import ccgram.thread_router as tr
+
+    monkeypatch.setattr(
+        tr,
+        "thread_router",
+        type("R", (), {"resolve_chat_id": lambda self, u, t: 555})(),
+    )
+    monkeypatch.setattr(progress_bubble, "_resolve_transcript", lambda wid: None)
+    monkeypatch.setattr(
+        "ccgram_pro.input_pipeline.silencer_guard.is_silent_for_window",
+        lambda wid: True,
+    )
+    bot = _make_bot()
+    await progress_bubble.begin_for_turn(
+        window_id="@1", user_id=7, thread_id=2, bot=bot, fallback_chat_id=111
+    )
+    assert progress_bubble.is_active("@1")
+    # Binding (555) wins over the stale-message fallback (111).
+    assert bot.send_message.await_args.kwargs["chat_id"] == 555
+
+
+async def test_begin_for_turn_uses_fallback_when_binding_missing(monkeypatch) -> None:
+    import ccgram.thread_router as tr
+
+    monkeypatch.setattr(
+        tr, "thread_router", type("R", (), {"resolve_chat_id": lambda self, u, t: 0})()
+    )
+    monkeypatch.setattr(progress_bubble, "_resolve_transcript", lambda wid: None)
+    monkeypatch.setattr(
+        "ccgram_pro.input_pipeline.silencer_guard.is_silent_for_window",
+        lambda wid: True,
+    )
+    bot = _make_bot()
+    await progress_bubble.begin_for_turn(
+        window_id="@1", user_id=7, thread_id=2, bot=bot, fallback_chat_id=111
+    )
+    assert bot.send_message.await_args.kwargs["chat_id"] == 111
+
+
+async def test_begin_for_turn_noop_when_not_silent(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "ccgram_pro.input_pipeline.silencer_guard.is_silent_for_window",
+        lambda wid: False,
+    )
+    bot = _make_bot()
+    await progress_bubble.begin_for_turn(
+        window_id="@1", user_id=7, thread_id=2, bot=bot, fallback_chat_id=111
+    )
+    assert not progress_bubble.is_active("@1")
+    bot.send_message.assert_not_called()
 
 
 async def test_sweep_stale_bubbles_deletes_persisted() -> None:

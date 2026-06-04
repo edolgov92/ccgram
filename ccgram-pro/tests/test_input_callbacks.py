@@ -53,6 +53,38 @@ async def test_flush_success_deletes_status_with_no_notification(monkeypatch) ->
     assert q.answers == [""]  # silent ack, no toast text
 
 
+async def test_flush_starts_bubble_even_when_callback_expired(monkeypatch) -> None:
+    from telegram.error import BadRequest
+
+    forwarded: list[str] = []
+    bubble_started: list[str] = []
+
+    async def stub_flush(window_id: str):
+        return SimpleNamespace(combined_text="hi", item_count=2, preamble_included=True)
+
+    async def stub_forward(window_id, user_id, thread_id, text, client, message):  # noqa: ANN001, ARG001
+        forwarded.append(text)
+
+    async def stub_begin(**kwargs: Any) -> None:
+        bubble_started.append(kwargs["window_id"])
+
+    monkeypatch.setattr(callbacks, "flush", stub_flush)
+    monkeypatch.setattr(intercept, "_ORIGINAL_FORWARD_MESSAGE", stub_forward)
+    monkeypatch.setattr(
+        "ccgram_pro.output_pipeline.progress_bubble.begin_for_turn", stub_begin
+    )
+
+    class _ExpiredQuery(_Query):
+        async def answer(self, text: str = "", **_kw: Any) -> None:
+            raise BadRequest("Query is too old and response timeout expired")
+
+    q = _ExpiredQuery()
+    # Must NOT raise, and the bubble must still start despite the dead callback.
+    await callbacks._do_flush(q, 7, 100, "@5", _ctx())
+    assert forwarded == ["hi"]
+    assert bubble_started == ["@5"]
+
+
 async def test_flush_failure_keeps_message_and_alerts(monkeypatch) -> None:
     async def stub_flush(window_id: str):
         return SimpleNamespace(
