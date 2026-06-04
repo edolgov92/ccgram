@@ -375,32 +375,36 @@ def is_general_topic(message: Message) -> bool:
 async def handle_general_topic_message(
     bot: Bot, message: Message, chat_id: int
 ) -> None:
-    """Handle messages in General topic: pin hint once, then react only.
+    """Handle messages in the General / "All" view: reply on EVERY message.
 
-    On first General-topic message per chat, sends a warning and pins it.
-    Subsequent messages get a silent 🤔 reaction instead.
+    A message here reaches no session, so the user — who may have typed in the
+    wrong place — gets an immediate reply every time telling them their message
+    was not delivered and how to fix it. The same hint is pinned once per chat as
+    a persistent reminder. (Previously only the first message replied and the
+    rest got a silent 🤔 reaction, which was too easy to miss.)
     """
-    # Check cache first to avoid unnecessary API calls
-    if not _general_topic_pin_cache.get(chat_id):
-        try:
-            chat_info = await bot.get_chat(chat_id)
-            pinned = chat_info.pinned_message
-            if pinned and pinned.from_user and pinned.from_user.id == bot.id:
-                _general_topic_pin_cache[chat_id] = True
-        except TelegramError:
-            pass
+    try:
+        hint = await message.reply_text(
+            "🤖 You're in the General view — this message was NOT sent to any "
+            "session. Open a named topic (or create one) and write there to talk "
+            "to an agent."
+        )
+    except TelegramError:
+        return
 
+    # Pin the hint once per chat as a persistent header; skip if we (or a prior
+    # run of the bot) already pinned one.
     if _general_topic_pin_cache.get(chat_id):
-        # Already pinned — just react silently
-        with contextlib.suppress(TelegramError):
-            await message.set_reaction("🤔")
-    else:
-        # Set cache before attempt to guarantee one-shot behavior even if pin fails
-        _general_topic_pin_cache[chat_id] = True
-        try:
-            hint = await message.reply_text(
-                "🤖 Please use a named topic. Create a new topic to start a session."
-            )
-            await hint.pin(disable_notification=True)
-        except TelegramError:
-            pass
+        return
+    try:
+        chat_info = await bot.get_chat(chat_id)
+        pinned = chat_info.pinned_message
+        if pinned and pinned.from_user and pinned.from_user.id == bot.id:
+            _general_topic_pin_cache[chat_id] = True
+            return
+    except TelegramError:
+        pass
+    # Set the cache before pinning so a pin failure still guarantees one-shot.
+    _general_topic_pin_cache[chat_id] = True
+    with contextlib.suppress(TelegramError):
+        await hint.pin(disable_notification=True)

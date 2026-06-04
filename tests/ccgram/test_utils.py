@@ -513,16 +513,20 @@ class TestHandleGeneralTopicMessage:
         hint_msg.pin.assert_called_once_with(disable_notification=True)
         assert _general_topic_pin_cache[123] is True
 
-    async def test_subsequent_message_reacts_only(self) -> None:
+    async def test_subsequent_message_replies_again_without_repinning(self) -> None:
         _general_topic_pin_cache[123] = True
 
         bot = AsyncMock()
         message = AsyncMock()
+        hint_msg = AsyncMock()
+        message.reply_text = AsyncMock(return_value=hint_msg)
 
         await handle_general_topic_message(bot, message, chat_id=123)
 
-        message.set_reaction.assert_called_once_with("\U0001f914")
-        message.reply_text.assert_not_called()
+        # Every wrong-place message gets an immediate reply now (no silent react).
+        message.reply_text.assert_called_once()
+        assert "named topic" in message.reply_text.call_args.args[0]
+        hint_msg.pin.assert_not_called()  # already pinned once — don't re-pin
 
     async def test_detects_existing_pinned_bot_message(self) -> None:
         bot = AsyncMock()
@@ -534,11 +538,14 @@ class TestHandleGeneralTopicMessage:
         bot.get_chat = AsyncMock(return_value=chat_info)
 
         message = AsyncMock()
+        hint_msg = AsyncMock()
+        message.reply_text = AsyncMock(return_value=hint_msg)
 
         await handle_general_topic_message(bot, message, chat_id=456)
 
-        message.set_reaction.assert_called_once_with("\U0001f914")
-        message.reply_text.assert_not_called()
+        # Still replies (immediate feedback) but does not re-pin the existing hint.
+        message.reply_text.assert_called_once()
+        hint_msg.pin.assert_not_called()
         assert _general_topic_pin_cache[456] is True
 
     async def test_ignores_pinned_message_from_other_bot(self) -> None:
@@ -575,13 +582,13 @@ class TestHandleGeneralTopicMessage:
         await handle_general_topic_message(bot, message, chat_id=789)
         assert _general_topic_pin_cache[789] is True
 
-    async def test_react_failure_does_not_crash(self) -> None:
+    async def test_reply_failure_does_not_crash(self) -> None:
         from telegram.error import TelegramError
 
         _general_topic_pin_cache[123] = True
         bot = AsyncMock()
         message = AsyncMock()
-        message.set_reaction = AsyncMock(side_effect=TelegramError("forbidden"))
+        message.reply_text = AsyncMock(side_effect=TelegramError("forbidden"))
 
         await handle_general_topic_message(bot, message, chat_id=123)
 
