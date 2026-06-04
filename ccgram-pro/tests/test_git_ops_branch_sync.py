@@ -5,6 +5,7 @@ from pathlib import Path
 
 from ccgram_pro.git_ops import (
     default_branch,
+    has_tracked_changes,
     has_unpushed_commits,
 )
 
@@ -79,3 +80,23 @@ def test_has_unpushed_commits_false_without_upstream(tmp_path: Path) -> None:
     _git(repo, "commit", "-qm", "init")
     # No upstream configured → can't compare → False (don't over-report).
     assert has_unpushed_commits(repo) is False
+
+
+def test_has_tracked_changes_ignores_untracked(tmp_path: Path) -> None:
+    repo = tmp_path / "r"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    _git(repo, "config", "user.email", "t@example.com")
+    _git(repo, "config", "user.name", "T")
+    (repo / "f").write_text("x\n")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "init")
+
+    # Untracked tool-artifact dirs (like .ccgram-uploads/ / .claude/) → NOT dirty.
+    (repo / ".ccgram-uploads").mkdir()
+    (repo / ".ccgram-uploads" / "pic.png").write_text("data")
+    assert has_tracked_changes(repo) is False
+
+    # A real modification to a tracked file → dirty.
+    (repo / "f").write_text("changed\n")
+    assert has_tracked_changes(repo) is True

@@ -89,6 +89,19 @@ def has_uncommitted_changes(repo: Path | str) -> bool:
     return not working_tree_status(repo).clean
 
 
+def has_tracked_changes(repo: Path | str) -> bool:
+    """True when there are staged or unstaged changes to TRACKED files.
+
+    Excludes untracked files: a branch checkout / fast-forward pull carries them
+    across (git never deletes them), so untracked files must not block a branch
+    switch. This is the signal the new-session picker uses to gate the
+    default-branch option, so tool artifacts like ``.ccgram-uploads/`` or
+    ``.claude/`` don't read as "dirty".
+    """
+    status = working_tree_status(repo)
+    return status.staged > 0 or status.unstaged > 0
+
+
 def gh_is_authenticated() -> bool:
     """True when ``gh auth status`` exits 0 (gh present and logged in)."""
     try:

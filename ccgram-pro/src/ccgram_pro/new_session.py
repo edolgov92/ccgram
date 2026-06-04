@@ -432,7 +432,7 @@ def _probe_git(path: Path | str) -> dict[str, Any]:
         GitOpError,
         current_branch,
         default_branch,
-        has_uncommitted_changes,
+        has_tracked_changes,
         has_unpushed_commits,
         is_git_repo,
     )
@@ -448,7 +448,9 @@ def _probe_git(path: Path | str) -> dict[str, Any]:
     }
     try:
         info["current"] = current_branch(path)
-        info["dirty"] = has_uncommitted_changes(path)
+        # Tracked changes only — untracked files (e.g. .ccgram-uploads/, .claude/)
+        # survive a checkout/pull, so they must NOT read as dirty or block a switch.
+        info["dirty"] = has_tracked_changes(path)
         info["unpushed"] = has_unpushed_commits(path)
         info["default"] = default_branch(path, allow_remote=False)
     except (GitOpError, OSError) as exc:
@@ -947,7 +949,7 @@ async def _provision_current(session: store.PendingSession, repo: Path) -> None:
         checkout,
         current_branch,
         default_branch,
-        has_uncommitted_changes,
+        has_tracked_changes,
         pull_ff_only,
     )
 
@@ -957,7 +959,7 @@ async def _provision_current(session: store.PendingSession, repo: Path) -> None:
         )
         if not target:
             raise _StartError("Couldn't detect the repo's default branch.")
-        if await asyncio.to_thread(has_uncommitted_changes, repo):
+        if await asyncio.to_thread(has_tracked_changes, repo):
             raise _StartError(
                 "Working tree has uncommitted changes — commit/stash, or pick the "
                 "current branch."
@@ -977,7 +979,7 @@ async def _provision_current(session: store.PendingSession, repo: Path) -> None:
         try:
             cur = await asyncio.to_thread(current_branch, repo)
             if session.base_branch != cur:
-                if await asyncio.to_thread(has_uncommitted_changes, repo):
+                if await asyncio.to_thread(has_tracked_changes, repo):
                     raise _StartError(
                         "Working tree has uncommitted changes — commit/stash, or "
                         "pick the current branch."
