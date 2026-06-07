@@ -95,6 +95,57 @@ def test_model_table_maps_keys() -> None:
     assert new_session._MODEL_STR["opus48-1m"] == "claude-opus-4-8[1m]"
 
 
+def test_resolve_model_key_accepts_keys_strings_and_ignores_legacy() -> None:
+    assert new_session._resolve_model_key("opus48-1m") == "opus48-1m"
+    assert new_session._resolve_model_key("opus48") == "opus48"
+    assert new_session._resolve_model_key("claude-opus-4-8[1m]") == "opus48-1m"
+    assert new_session._resolve_model_key("claude-opus-4-8") == "opus48"
+    assert new_session._resolve_model_key("opus") is None
+    assert new_session._resolve_model_key("") is None
+    assert new_session._resolve_model_key(None) is None
+
+
+async def test_apply_selection_applies_project_default_model(monkeypatch) -> None:
+    from ccgram_pro.config import layer_dir
+
+    layer_dir().mkdir(parents=True, exist_ok=True)
+    (layer_dir() / "projects.toml").write_text(
+        '[[project]]\npath = "/tmp/a"\nlabel = "A"\n'
+        '[[project]]\npath = "/tmp/b"\nlabel = "B"\n'
+        'default_model = "claude-opus-4-8[1m]"\n'
+    )
+
+    async def _noop(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(new_session, "_resolve_project_git", _noop)
+    s = _session()
+    assert s.model_key == "opus48"
+    q = SimpleNamespace(answer=_noop, edit_message_text=_noop)
+    await new_session._apply_selection(q, s, "project:1")
+    assert s.project_idx == 1
+    assert s.model_key == "opus48-1m"
+
+
+async def test_apply_selection_keeps_default_for_legacy_model(monkeypatch) -> None:
+    from ccgram_pro.config import layer_dir
+
+    layer_dir().mkdir(parents=True, exist_ok=True)
+    (layer_dir() / "projects.toml").write_text(
+        '[[project]]\npath = "/tmp/a"\nlabel = "A"\ndefault_model = "opus"\n'
+    )
+
+    async def _noop(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(new_session, "_resolve_project_git", _noop)
+    s = _session()
+    await new_session._apply_selection(
+        SimpleNamespace(answer=_noop, edit_message_text=_noop), s, "project:0"
+    )
+    assert s.model_key == "opus48"
+
+
 def test_build_keyboard_marks_selection(projects_toml) -> None:
     s = _session(project_idx=1, model_key="opus48-1m", effort_key="max", mode="plan")
     kb = new_session._build_keyboard(s)

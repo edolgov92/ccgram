@@ -57,6 +57,26 @@ _MODELS: list[tuple[str, str, str]] = [
 ]
 _MODEL_STR = {key: model for key, _label, model in _MODELS}
 
+
+def _resolve_model_key(value: str | None) -> str | None:
+    """Map a project's ``default_model`` to a known picker model key.
+
+    Accepts either a picker key (``opus48``, ``opus48-1m``) or the full
+    ``claude --model`` string (``claude-opus-4-8[1m]``). Returns ``None`` when
+    the value is empty or unrecognized, so the caller keeps the current
+    selection — legacy ``default_model = "opus"`` entries are simply ignored
+    (the picker default applies) rather than forcing a bad ``--model``.
+    """
+    if not value:
+        return None
+    if value in _MODEL_STR:
+        return value
+    for key, _label, model in _MODELS:
+        if value == model:
+            return key
+    return None
+
+
 # (effort key passed to --effort, short button label)
 _EFFORTS: list[tuple[str, str]] = [
     ("low", "Low"),
@@ -558,6 +578,12 @@ async def _apply_selection(
         projects = load_projects()
         if 0 <= idx < len(projects):
             session.project_idx = idx
+            # Apply the project's preferred model (e.g. the HP PM workspace
+            # pins Opus 4.8 · 1M). Only applied when it resolves to a known
+            # model — never clobbers a manual model tap with a bad value.
+            model_key = _resolve_model_key(projects[idx].default_model)
+            if model_key:
+                session.model_key = model_key
             session.base_branch = None
             session.branch_choices = []
             session.base_page = 0
