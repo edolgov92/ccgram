@@ -89,6 +89,12 @@ class WindowSidecar:
     base_branch: str | None = None
     current_batch: list[BatchItem] = field(default_factory=list)
     preamble_sent: bool = False
+    # Per-project first-message preamble, copied from the picked project's
+    # ``default_preamble`` (projects.toml) at session start. When set, the
+    # batcher prepends THIS instead of the global ``defaults.preamble`` on the
+    # first flush — so a project can define its own operating prompt. ``None``
+    # falls back to the global default.
+    project_preamble: str | None = None
     plan_mode: str = "pending"  # "pending" | "entered" | "approved" | "skipped"
     current_progress_bubble: dict[str, int] | None = (
         None  # {"thread_id": .., "message_id": .., "chat_id": ..}
@@ -264,6 +270,7 @@ def _deserialize(raw: str, window_id: str, path: Path) -> WindowSidecar | None:
             base_branch=data.get("base_branch") or None,
             current_batch=items,
             preamble_sent=bool(data.get("preamble_sent", False)),
+            project_preamble=data.get("project_preamble") or None,
             plan_mode=str(data.get("plan_mode", "pending")),
             current_progress_bubble=bubble,
             last_summary_messages=summaries,

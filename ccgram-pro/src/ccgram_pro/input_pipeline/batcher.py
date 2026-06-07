@@ -107,7 +107,10 @@ async def flush(window_id: str) -> FlushResult | None:
         include_preamble = not sidecar.preamble_sent
         preamble: str | None = None
         if include_preamble:
-            preamble = load_settings().defaults.preamble
+            # A project may define its own first-message preamble
+            # (projects.toml ``default_preamble``, copied to the sidecar at
+            # session start). Prefer it; fall back to the global default.
+            preamble = sidecar.project_preamble or load_settings().defaults.preamble
         combined = _compose(items, preamble)
         sidecar.current_batch = []
         if include_preamble:

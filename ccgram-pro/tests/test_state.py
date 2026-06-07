@@ -30,6 +30,23 @@ def test_save_and_load_round_trip() -> None:
     assert loaded.window_creation_epoch == 100.0
 
 
+def test_project_preamble_round_trips() -> None:
+    ensure_layer_dirs()
+    sidecar = state.WindowSidecar(window_id="@pp", window_creation_epoch=1.0)
+    sidecar.project_preamble = "be the senior PM"
+    state.save(sidecar)
+    loaded = state.load("@pp")
+    assert loaded is not None
+    assert loaded.project_preamble == "be the senior PM"
+
+
+def test_project_preamble_defaults_to_none() -> None:
+    state.save(state.WindowSidecar(window_id="@pn", window_creation_epoch=1.0))
+    loaded = state.load("@pn")
+    assert loaded is not None
+    assert loaded.project_preamble is None
+
+
 def test_get_or_create_creates_when_missing() -> None:
     sidecar = state.get_or_create("@2", live_window_creation_epoch=200.0)
     assert sidecar.window_id == "@2"

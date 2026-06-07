@@ -79,6 +79,34 @@ async def test_flush_includes_preamble_first_time_only(sidecar) -> None:
     assert preamble not in second.combined_text
 
 
+async def test_flush_uses_project_preamble_when_set() -> None:
+    """A per-project preamble overrides the global default on first flush."""
+    from ccgram_pro.config import load_settings
+
+    custom = "You are the senior PM. Read the memory docs first."
+    state.save(
+        state.WindowSidecar(
+            window_id="@p", window_creation_epoch=0.0, project_preamble=custom
+        )
+    )
+    await enqueue("@p", kind="text", body="hi")
+    result = await flush("@p")
+    assert result is not None
+    assert result.preamble_included is True
+    assert custom in result.combined_text
+    assert load_settings().defaults.preamble not in result.combined_text
+
+
+async def test_flush_falls_back_to_global_when_no_project_preamble(sidecar) -> None:
+    """With no per-project preamble, the global default still applies."""
+    from ccgram_pro.config import load_settings
+
+    await enqueue("@b", kind="text", body="hi")
+    result = await flush("@b")
+    assert result is not None
+    assert load_settings().defaults.preamble in result.combined_text
+
+
 async def test_flush_marks_voice_items(sidecar) -> None:
     await enqueue("@b", kind="text", body="text part")
     await enqueue("@b", kind="voice", body="voice transcript")

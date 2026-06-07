@@ -799,7 +799,7 @@ async def _handle_start(
         _override_plan = False
 
     created_wid = await _finalize_start(
-        user_id, session, clone_dest, worktree_dest, repo
+        user_id, session, clone_dest, worktree_dest, repo, project.default_preamble
     )
     if created_wid is not None:
         # Bound successfully — delete the picker card instead of leaving
@@ -839,6 +839,7 @@ async def _finalize_start(
     clone_dest: Path | None,
     worktree_dest: Path | None,
     repo: Path,
+    project_preamble: str | None = None,
 ) -> str | None:
     """Resolve the created window, persist the sidecar, and clear the store.
 
@@ -862,6 +863,7 @@ async def _finalize_start(
     async with state.transaction(created_wid):
         sidecar = state.get_or_create(created_wid)
         sidecar.project_path = str(repo)
+        sidecar.project_preamble = project_preamble
         sidecar.model = session.model_key
         sidecar.reasoning = session.effort_key
         sidecar.mode = session.mode
