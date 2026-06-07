@@ -115,7 +115,25 @@ def has_unpushed_commits(repo: Path | str) -> bool:
 
 
 def pull_ff_only(repo: Path | str) -> None:
-    """``git pull --ff-only`` — raises :class:`GitOpError` if not fast-forwardable."""
+    """``git pull --ff-only``; a no-op when the branch has no upstream.
+
+    A local-only repository (no remote / no tracking branch) has nothing to
+    pull — ``git pull`` would fail with "There is no tracking information for
+    the current branch". Treat that as a skip rather than an error so a
+    remote-less repo (e.g. the local PM workspace) starts cleanly. Still raises
+    :class:`GitOpError` when a real upstream exists but the pull is not a
+    fast-forward.
+    """
+    upstream = run_git(
+        repo,
+        "rev-parse",
+        "--abbrev-ref",
+        "--symbolic-full-name",
+        "@{u}",
+        check=False,
+    )
+    if upstream.returncode != 0:
+        return  # no upstream tracking branch — nothing to pull
     run_git(repo, "pull", "--ff-only")
 
 
