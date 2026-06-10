@@ -13,6 +13,8 @@ Scenarios shipping today:
 - **Self-review** (every session): a deep self-review checklist over the last,
   unpushed changes.
 - **Commit & push** (git repos): review, write a message, push the branch.
+- **Feature branch + push** (git repos): create a feature branch, commit the
+  changes, and push it.
 - **Sync main branch** (git repos): switch to the repo's default branch
   (``develop`` for the humanprogram backend, ``main``/``master`` elsewhere — read
   from the remote) and fast-forward pull; refuses to clobber uncommitted work.
@@ -22,8 +24,12 @@ Scenarios shipping today:
   reply (mirrors the voice-edit flow: a high-priority ``MessageHandler`` in
   group −12 consumes the next message in that topic before ccgram's text
   handler can forward it).
+- **All — branch → PR → auto-fix** (humanprogram backend/app only): the full
+  pipeline — create a feature branch, commit, push, open a PR with ``gh``, then
+  drive the PR auto-fixer on that new PR until green. No PR number to supply —
+  the agent uses the one it just created.
 
-The PR-fixer is gated on the session's git ``origin`` remote resolving to a
+The PR-fixer (and the all-in-one flow) is gated on the session's git ``origin`` remote resolving to a
 known humanprogram repository, so the ``REPO`` env (``backend`` →
 ``primer_server``, ``frontend`` → ``hyper_school_dashboard``) is unambiguous and
 the user only has to supply the number.
@@ -159,6 +165,45 @@ Please switch to the repository's default (main) branch and pull the latest chan
 When done, report which branch you are now on and what was pulled (e.g. "develop — fast-forwarded 12 commits" or "main — already up to date")."""
 
 
+_FEATURE_BRANCH_PROMPT = """\
+Please create a new feature branch for the current changes, then commit and push it.
+
+- First review what actually changed (git status + git diff) so you understand the change and can pick a good branch name.
+- Create a NEW branch off the current branch with a clear, conventional name that matches this repo's existing branch style (e.g. `feature/<short-kebab-summary>`). If you are already on a feature branch that has unrelated in-progress work, STOP and ask me before branching.
+- Stage only the files that belong in this change — do NOT blindly `git add -A`. Leave out anything unintended or unrelated (build artifacts, local scratch/config, editor files, files outside the scope of recent work); if you spot such a file, leave it unstaged and tell me about it.
+- Write a clear, meaningful commit message describing the INTENT of the change (not a file list), following this project's existing commit-message conventions (use Conventional Commits if that's the style here). Do NOT add a `Co-Authored-By` trailer and do NOT mention Claude, AI, or this assistant anywhere in the commit message.
+- Push the new branch and set its upstream (`git push -u origin <branch>`).
+- If there is genuinely nothing to commit, say so. If anything is ambiguous or risky (unrelated changes mixed together, detached HEAD, conflicts), STOP and ask me instead of guessing.
+
+When done, report the branch name, the exact commit message you used, and the push result (branch + remote)."""
+
+
+# Prepended to the PR-fixer body to make the all-in-one flow. ``<PR>`` in the
+# fixer body is the number ``gh pr create`` returns in STEP 2.
+_FULL_FLOW_PREAMBLE = """\
+Please take the current changes all the way to a green, merge-ready pull request. Do every step below in order; only stop if something is genuinely ambiguous or risky (and then ask me).
+
+STEP 1 — Feature branch, commit & push:
+- Review what actually changed (git status + git diff). Create a NEW branch off the current branch with a clear, conventional name matching this repo's style (e.g. `feature/<short-kebab-summary>`).
+- Stage only the files that belong in this change — do NOT blindly `git add -A`; leave out anything unintended or unrelated and tell me if you see such a file.
+- Commit with a clear, meaningful message describing the INTENT, following this project's commit conventions. Do NOT add a `Co-Authored-By` trailer and do NOT mention Claude, AI, or this assistant anywhere.
+- Push the branch and set its upstream (`git push -u origin <branch>`).
+
+STEP 2 — Open the pull request:
+- Create the PR with `gh pr create` against the repository's DEFAULT branch (for the humanprogram backend the default is `develop`; confirm via `git remote show origin`). Write a clear title (the change intent) and a concise body (what changed, why, and how to test). Do NOT mention Claude or AI in the PR.
+- Note the PR NUMBER that `gh pr create` returns — in every command below, `<PR>` is that number.
+
+STEP 3 — Drive the PR auto-fixer on the PR you just opened until all checks are green and it is merge-ready:
+
+"""
+
+
+def _full_flow_prompt(repo: str) -> str:
+    """Branch → commit → push → open PR → drive the PR auto-fixer (humanprogram)."""
+    fixer = _PR_FIXER_TEMPLATE.replace("__REPO__", repo).replace("__PR__", "<PR>")
+    return _FULL_FLOW_PREAMBLE + fixer
+
+
 # ── callback codec (window_id is the trailing, colon-safe field) ───────────────
 
 
@@ -171,7 +216,7 @@ def _decode(data: str) -> tuple[str, str] | None:
     if not data.startswith(_CB_PREFIX):
         return None
     action, _, window_id = data[len(_CB_PREFIX) :].partition(":")
-    if action not in ("menu", "sr", "cp", "sm", "pr", "x") or not window_id:
+    if action not in ("menu", "sr", "cp", "sm", "fb", "fa", "pr", "x") or not window_id:
         return None
     return action, window_id
 
@@ -373,6 +418,10 @@ async def _route_topic_action(
         await _run_commit_push(query, window_id, user_id, thread_id, context)
     elif action == "sm":
         await _run_sync_main(query, window_id, user_id, thread_id, context)
+    elif action == "fb":
+        await _run_feature_branch(query, window_id, user_id, thread_id, context)
+    elif action == "fa":
+        await _run_full_flow(query, window_id, user_id, thread_id, context)
     elif action == "pr":
         await _ask_pr_number(query, window_id, user_id, thread_id, context)
 
@@ -401,6 +450,14 @@ async def _open_menu(query: Any, window_id: str) -> None:
         rows.append(
             [
                 InlineKeyboardButton(
+                    "🌿 Feature branch + push",
+                    callback_data=_encode("fb", window_id),
+                )
+            ]
+        )
+        rows.append(
+            [
+                InlineKeyboardButton(
                     "🔄 Sync main branch", callback_data=_encode("sm", window_id)
                 )
             ]
@@ -410,6 +467,14 @@ async def _open_menu(query: Any, window_id: str) -> None:
             [
                 InlineKeyboardButton(
                     "🤖 PR auto-fixer", callback_data=_encode("pr", window_id)
+                )
+            ]
+        )
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    "🚀 Branch → PR → auto-fix",
+                    callback_data=_encode("fa", window_id),
                 )
             ]
         )
@@ -485,6 +550,49 @@ async def _run_sync_main(
         bot=context.bot,
     )
     await query.answer("Sync started")
+
+
+async def _run_feature_branch(
+    query: Any, window_id: str, user_id: int, thread_id: int, context: Any
+) -> None:
+    note = (
+        "🌿 Scenario triggered: Feature branch + push\n"
+        "Creating a feature branch, committing the changes, and pushing it."
+    )
+    await _edit_to_note(query.message, note)
+    await _forward_scenario(
+        window_id=window_id,
+        user_id=user_id,
+        thread_id=thread_id,
+        prompt=_FEATURE_BRANCH_PROMPT,
+        anchor=query.message,
+        bot=context.bot,
+    )
+    await query.answer("Feature branch + push started")
+
+
+async def _run_full_flow(
+    query: Any, window_id: str, user_id: int, thread_id: int, context: Any
+) -> None:
+    repo = await _detect_pr_repo(window_id)
+    if repo is None:
+        await query.answer("Not a humanprogram backend/app repo", show_alert=True)
+        return
+    note = (
+        "🚀 Scenario triggered: Branch → PR → auto-fix\n"
+        "Feature branch + commit + push, opening a PR, then driving the PR "
+        "auto-fixer until all checks are green."
+    )
+    await _edit_to_note(query.message, note)
+    await _forward_scenario(
+        window_id=window_id,
+        user_id=user_id,
+        thread_id=thread_id,
+        prompt=_full_flow_prompt(repo),
+        anchor=query.message,
+        bot=context.bot,
+    )
+    await query.answer("Full flow started")
 
 
 async def _ask_pr_number(

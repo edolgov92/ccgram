@@ -564,3 +564,130 @@ async def test_cancel_clears_flag_and_deletes(monkeypatch) -> None:
         await scn.handle_scenarios_callback(update, ctx)
     assert scn.AWAITING_PR_NUMBER not in ctx.user_data
     assert msg.deleted
+
+
+def test_decode_feature_branch_and_full_flow() -> None:
+    assert scn._decode(scn._encode("fb", "@5")) == ("fb", "@5")
+    assert scn._decode(scn._encode("fa", "@5")) == ("fa", "@5")
+
+
+async def test_menu_shows_feature_branch_for_git_repo(monkeypatch) -> None:
+    _own(monkeypatch)
+    _detect(monkeypatch, None)
+    _git_repo(monkeypatch, True)
+    msg = _Msg()
+    update = _callback_update("ccgrampro:scn:menu:@5", msg)
+    with pytest.raises(ApplicationHandlerStop):
+        await scn.handle_scenarios_callback(update, SimpleNamespace(bot=_Bot()))
+    cbs = [
+        b.callback_data
+        for row in msg.replies[0]["reply_markup"].inline_keyboard
+        for b in row
+    ]
+    assert "ccgrampro:scn:fb:@5" in cbs
+
+
+async def test_menu_hides_feature_branch_for_non_git_dir(monkeypatch) -> None:
+    _own(monkeypatch)
+    _detect(monkeypatch, None)
+    _git_repo(monkeypatch, False)
+    msg = _Msg()
+    update = _callback_update("ccgrampro:scn:menu:@5", msg)
+    with pytest.raises(ApplicationHandlerStop):
+        await scn.handle_scenarios_callback(update, SimpleNamespace(bot=_Bot()))
+    cbs = [
+        b.callback_data
+        for row in msg.replies[0]["reply_markup"].inline_keyboard
+        for b in row
+    ]
+    assert "ccgrampro:scn:fb:@5" not in cbs
+
+
+async def test_menu_shows_full_flow_when_pr_eligible(monkeypatch) -> None:
+    _own(monkeypatch)
+    _detect(monkeypatch, "backend")
+    _git_repo(monkeypatch, True)
+    msg = _Msg()
+    update = _callback_update("ccgrampro:scn:menu:@5", msg)
+    with pytest.raises(ApplicationHandlerStop):
+        await scn.handle_scenarios_callback(update, SimpleNamespace(bot=_Bot()))
+    cbs = [
+        b.callback_data
+        for row in msg.replies[0]["reply_markup"].inline_keyboard
+        for b in row
+    ]
+    assert "ccgrampro:scn:fa:@5" in cbs
+
+
+async def test_menu_hides_full_flow_when_ineligible(monkeypatch) -> None:
+    _own(monkeypatch)
+    _detect(monkeypatch, None)
+    _git_repo(monkeypatch, True)
+    msg = _Msg()
+    update = _callback_update("ccgrampro:scn:menu:@5", msg)
+    with pytest.raises(ApplicationHandlerStop):
+        await scn.handle_scenarios_callback(update, SimpleNamespace(bot=_Bot()))
+    cbs = [
+        b.callback_data
+        for row in msg.replies[0]["reply_markup"].inline_keyboard
+        for b in row
+    ]
+    assert "ccgrampro:scn:fa:@5" not in cbs
+
+
+async def test_feature_branch_forwards_prompt(monkeypatch) -> None:
+    _own(monkeypatch)
+    forwarded = _stub_forward(monkeypatch)
+    _stub_bubble(monkeypatch)
+    msg = _Msg()
+    update = _callback_update("ccgrampro:scn:fb:@5", msg)
+    with pytest.raises(ApplicationHandlerStop):
+        await scn.handle_scenarios_callback(update, SimpleNamespace(bot=_Bot()))
+    assert msg.edits and "Feature branch" in msg.edits[0]["text"]
+    assert forwarded == [("@5", 7, 2, scn._FEATURE_BRANCH_PROMPT)]
+
+
+async def test_full_flow_forwards_prompt(monkeypatch) -> None:
+    _own(monkeypatch)
+    _detect(monkeypatch, "backend")
+    forwarded = _stub_forward(monkeypatch)
+    _stub_bubble(monkeypatch)
+    msg = _Msg()
+    update = _callback_update("ccgrampro:scn:fa:@5", msg)
+    with pytest.raises(ApplicationHandlerStop):
+        await scn.handle_scenarios_callback(update, SimpleNamespace(bot=_Bot()))
+    assert msg.edits and "auto-fix" in msg.edits[0]["text"]
+    assert forwarded == [("@5", 7, 2, scn._full_flow_prompt("backend"))]
+
+
+async def test_full_flow_ineligible_does_not_forward(monkeypatch) -> None:
+    _own(monkeypatch)
+    _detect(monkeypatch, None)
+    forwarded = _stub_forward(monkeypatch)
+    _stub_bubble(monkeypatch)
+    msg = _Msg()
+    update = _callback_update("ccgrampro:scn:fa:@5", msg)
+    with pytest.raises(ApplicationHandlerStop):
+        await scn.handle_scenarios_callback(update, SimpleNamespace(bot=_Bot()))
+    assert forwarded == []
+
+
+def test_feature_branch_prompt_content() -> None:
+    p = scn._FEATURE_BRANCH_PROMPT
+    low = p.lower()
+    assert "feature branch" in low or "feature/" in p
+    assert "co-authored-by" in low
+    assert "claude" in low
+    assert "git add -A" in p
+    assert "push" in low
+
+
+def test_full_flow_prompt_content() -> None:
+    p = scn._full_flow_prompt("backend")
+    assert "__PR__" not in p and "__REPO__" not in p
+    assert "STEP 1" in p and "STEP 2" in p and "STEP 3" in p
+    assert "gh pr create" in p
+    assert "REPO=backend" in p
+    assert "<PR>" in p
+    assert "no more than 20 iterations" in p
+    assert "claude" in p.lower()
