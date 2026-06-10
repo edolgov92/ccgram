@@ -66,11 +66,25 @@ PROGRESS_SYSTEM_PROMPT = (
     "(a greeting, a one-line answer, or a clarifying question)."
 )
 
-# Appended verbatim to every Claude launch so Claude itself produces both the
-# user-facing TL;DR and the live progress notes. Claude concatenates multiple
-# ``--append-system-prompt`` tokens, so passing the two combined is equivalent
-# to passing them separately — we combine for a single, tidy flag.
-LAUNCH_SYSTEM_PROMPT = f"{TLDR_SYSTEM_PROMPT}\n\n{PROGRESS_SYSTEM_PROMPT}"
+INTERACTION_SYSTEM_PROMPT = (
+    "ASKING THE USER: do NOT use the AskUserQuestion tool or any built-in "
+    "interactive multiple-choice / option-picker UI — the user dislikes it and "
+    "reads/replies in a normal chat. When you need input — a decision, missing "
+    "information, or a choice between options — just ASK IN PLAIN TEXT in your "
+    "reply. You may ask several things at once (a short numbered list is fine), "
+    "spell out the options to choose from, and give your recommendation; the "
+    "user will answer everything in their next message. Never block on an "
+    "interactive question widget."
+)
+
+# Appended verbatim to every Claude launch so Claude itself produces the
+# user-facing TL;DR and the live progress notes, and asks questions as plain
+# text instead of the interactive picker. Claude concatenates multiple
+# ``--append-system-prompt`` tokens, so passing them combined is equivalent to
+# passing them separately — we combine for a single, tidy flag.
+LAUNCH_SYSTEM_PROMPT = (
+    f"{TLDR_SYSTEM_PROMPT}\n\n{PROGRESS_SYSTEM_PROMPT}\n\n{INTERACTION_SYSTEM_PROMPT}"
+)
 
 
 def extract_progress_lines(text: str) -> list[str]:
