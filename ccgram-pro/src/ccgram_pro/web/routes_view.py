@@ -198,6 +198,7 @@ _PAGE_TEMPLATE = """\
   <footer>ccgram-pro share · token expires 3 days from issue</footer>
 </main>
 {infinite_scroll_js}
+{copy_js}
 </body>
 </html>
 """
@@ -271,6 +272,104 @@ _INFINITE_SCROLL_JS = """\
 </script>
 """
 
+# Copy-to-clipboard decoration: one button per message bubble (copies the whole
+# message) and one per <pre> block (copies just that block). Pure client-side —
+# the server HTML stays unchanged, and a MutationObserver re-decorates rows the
+# infinite-scroll fragment endpoint prepends. Kept out of the page template so
+# its braces never collide with str.format placeholders.
+_COPY_JS = """\
+<script>
+(function () {
+  function copyText(text, btn) {
+    function ok() {
+      btn.textContent = '\\u2713';
+      btn.classList.add('copied');
+      setTimeout(function () {
+        btn.textContent = '\\u29c9';
+        btn.classList.remove('copied');
+      }, 1200);
+    }
+    function fallback() {
+      var ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); ok(); } catch (e) {}
+      document.body.removeChild(ta);
+    }
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text).then(ok, fallback);
+    } else { fallback(); }
+  }
+
+  function textOf(el) {
+    var clone = el.cloneNode(true);
+    clone.querySelectorAll('.copy-btn').forEach(function (b) { b.remove(); });
+    var probe = document.createElement('div');
+    probe.style.position = 'fixed';
+    probe.style.left = '-99999px';
+    probe.appendChild(clone);
+    document.body.appendChild(probe);   // innerText needs a rendered node
+    var text = clone.innerText;
+    document.body.removeChild(probe);
+    return text.replace(/\\u00a0/g, ' ').trim();
+  }
+
+  function makeBtn(getText) {
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'copy-btn';
+    btn.title = 'Copy to clipboard';
+    btn.setAttribute('aria-label', 'Copy to clipboard');
+    btn.textContent = '\\u29c9';
+    btn.addEventListener('click', function (ev) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      copyText(getText(), btn);
+    });
+    return btn;
+  }
+
+  function decorate(root) {
+    root.querySelectorAll('.bubble').forEach(function (bubble) {
+      if (bubble.dataset.copyReady) return;
+      bubble.dataset.copyReady = '1';
+      bubble.appendChild(makeBtn(function () {
+        var content = bubble.querySelector('.content') ||
+                      bubble.querySelector('.tool-headline') || bubble;
+        return textOf(content);
+      }));
+    });
+    root.querySelectorAll('pre').forEach(function (pre) {
+      if (pre.dataset.copyReady) return;
+      pre.dataset.copyReady = '1';
+      var wrap = document.createElement('div');
+      wrap.className = 'prewrap';
+      pre.parentNode.insertBefore(wrap, pre);
+      wrap.appendChild(pre);
+      wrap.appendChild(makeBtn(function () { return textOf(pre); }));
+    });
+  }
+
+  function run() {
+    var main = document.querySelector('main');
+    if (!main) return;
+    decorate(main);
+    var container = document.getElementById('transcript');
+    if (container && 'MutationObserver' in window) {
+      new MutationObserver(function () { decorate(container); })
+        .observe(container, { childList: true, subtree: true });
+    }
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', run);
+  } else { run(); }
+})();
+</script>
+"""
+
 
 def _format_created(epoch: float) -> str:
     if not epoch:
@@ -329,6 +428,7 @@ async def _handle_view(request: "web.Request") -> "web.Response":
             older_link="",
             rows_html=f"<article>{_render_markdown(record.body_markdown)}</article>",
             infinite_scroll_js="",
+            copy_js=_COPY_JS,
         )
         return web.Response(text=page, content_type="text/html")
 
@@ -350,6 +450,7 @@ async def _handle_view(request: "web.Request") -> "web.Response":
         older_link=_older_link_html(token=token, oldest_index=start_index, limit=limit),
         rows_html=rows or '<p class="empty">No transcript content.</p>',
         infinite_scroll_js=_INFINITE_SCROLL_JS if start_index > 0 else "",
+        copy_js=_COPY_JS,
     )
     return web.Response(text=page, content_type="text/html")
 

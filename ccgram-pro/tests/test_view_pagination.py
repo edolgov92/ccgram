@@ -148,3 +148,25 @@ async def test_older_fragment_rejects_bad_token() -> None:
 async def test_view_rejects_expired_or_bad_token() -> None:
     async with _ViewServer() as client, client.get("/view/garbage") as resp:
         assert resp.status == 403
+
+
+async def test_view_includes_copy_buttons_js_and_css() -> None:
+    share_id = _make_transcript_share(5)
+    token = sign_share_token(bot_token=_BOT, share_id=share_id)
+    async with _ViewServer() as client, client.get(f"/view/{token}") as resp:
+        body = await resp.text()
+    assert "copy-btn" in body
+    assert "copyText" in body
+    assert "MutationObserver" in body
+    assert "navigator.clipboard" in body
+    assert ".prewrap" in body
+
+
+async def test_legacy_markdown_share_also_gets_copy_js() -> None:
+    share_id = save_share(kind="claude-turn", title="t", body_markdown="# hi\n`x`")
+    token = sign_share_token(bot_token=_BOT, share_id=share_id)
+    async with _ViewServer() as client, client.get(f"/view/{token}") as resp:
+        body = await resp.text()
+    assert "<article>" in body
+    assert "copy-btn" in body
+    assert "copyText" in body

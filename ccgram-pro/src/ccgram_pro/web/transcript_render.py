@@ -340,7 +340,23 @@ def transcript_css() -> str:
 
   .bubble { border-radius: var(--radius); padding: 11px 15px; max-width: 80%;
             border: 1px solid var(--border-soft); background: var(--surface);
-            box-shadow: var(--shadow); }
+            box-shadow: var(--shadow); position: relative; }
+
+  /* Copy-to-clipboard buttons (injected client-side by _COPY_JS). One per
+     bubble (whole message) and one per <pre> (that block only). Subtle until
+     hovered; always tappable on touch screens. */
+  .copy-btn { position: absolute; top: 6px; right: 6px; z-index: 2;
+              width: 26px; height: 26px; margin: 0; padding: 0;
+              display: flex; align-items: center; justify-content: center;
+              border: 1px solid var(--border-soft); border-radius: 7px;
+              background: var(--elevated); color: var(--muted);
+              font-size: 13px; line-height: 1; cursor: pointer;
+              box-shadow: none; opacity: 0.45;
+              transition: opacity .12s ease, color .12s ease; }
+  .copy-btn:hover { opacity: 1; color: var(--fg); }
+  .copy-btn.copied { opacity: 1; color: #2ea043; border-color: #1c3a28; }
+  .prewrap { position: relative; }
+  .prewrap > .copy-btn { top: 5px; right: 5px; }
   .role-label { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.06em;
                 color: var(--faint); margin-bottom: 5px; font-weight: 600; }
   .user-bubble { background: linear-gradient(160deg, #1d2740, #151a26);
