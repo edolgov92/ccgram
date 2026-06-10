@@ -91,15 +91,15 @@ def test_apply_overrides_does_not_duplicate_existing_prompt() -> None:
 
 
 def test_model_table_maps_keys() -> None:
-    assert new_session._MODEL_STR["opus48"] == "claude-opus-4-8"
-    assert new_session._MODEL_STR["opus48-1m"] == "claude-opus-4-8[1m]"
+    assert new_session._MODEL_STR["fable5"] == "claude-fable-5"
+    assert new_session._MODEL_STR["fable5-1m"] == "claude-fable-5[1m]"
 
 
 def test_resolve_model_key_accepts_keys_strings_and_ignores_legacy() -> None:
-    assert new_session._resolve_model_key("opus48-1m") == "opus48-1m"
-    assert new_session._resolve_model_key("opus48") == "opus48"
-    assert new_session._resolve_model_key("claude-opus-4-8[1m]") == "opus48-1m"
-    assert new_session._resolve_model_key("claude-opus-4-8") == "opus48"
+    assert new_session._resolve_model_key("fable5-1m") == "fable5-1m"
+    assert new_session._resolve_model_key("fable5") == "fable5"
+    assert new_session._resolve_model_key("claude-fable-5[1m]") == "fable5-1m"
+    assert new_session._resolve_model_key("claude-fable-5") == "fable5"
     assert new_session._resolve_model_key("opus") is None
     assert new_session._resolve_model_key("") is None
     assert new_session._resolve_model_key(None) is None
@@ -112,7 +112,7 @@ async def test_apply_selection_applies_project_default_model(monkeypatch) -> Non
     (layer_dir() / "projects.toml").write_text(
         '[[project]]\npath = "/tmp/a"\nlabel = "A"\n'
         '[[project]]\npath = "/tmp/b"\nlabel = "B"\n'
-        'default_model = "claude-opus-4-8[1m]"\n'
+        'default_model = "claude-fable-5[1m]"\n'
     )
 
     async def _noop(*_a, **_k):
@@ -120,11 +120,11 @@ async def test_apply_selection_applies_project_default_model(monkeypatch) -> Non
 
     monkeypatch.setattr(new_session, "_resolve_project_git", _noop)
     s = _session()
-    assert s.model_key == "opus48"
+    assert s.model_key == "fable5"
     q = SimpleNamespace(answer=_noop, edit_message_text=_noop)
     await new_session._apply_selection(q, s, "project:1")
     assert s.project_idx == 1
-    assert s.model_key == "opus48-1m"
+    assert s.model_key == "fable5-1m"
 
 
 async def test_apply_selection_keeps_default_for_legacy_model(monkeypatch) -> None:
@@ -143,11 +143,11 @@ async def test_apply_selection_keeps_default_for_legacy_model(monkeypatch) -> No
     await new_session._apply_selection(
         SimpleNamespace(answer=_noop, edit_message_text=_noop), s, "project:0"
     )
-    assert s.model_key == "opus48"
+    assert s.model_key == "fable5"
 
 
 def test_build_keyboard_marks_selection(projects_toml) -> None:
-    s = _session(project_idx=1, model_key="opus48-1m", effort_key="max", mode="plan")
+    s = _session(project_idx=1, model_key="fable5-1m", effort_key="max", mode="plan")
     kb = new_session._build_keyboard(s)
     flat = [btn.text for row in kb.inline_keyboard for btn in row]
     assert any("🟢" in t and "Project B" in t for t in flat)
@@ -164,7 +164,7 @@ def test_build_keyboard_callback_data(projects_toml) -> None:
     kb = new_session._build_keyboard(s)
     datas = [btn.callback_data for row in kb.inline_keyboard for btn in row]
     assert "ccgrampro:new:project:0" in datas
-    assert "ccgrampro:new:model:opus48-1m" in datas
+    assert "ccgrampro:new:model:fable5-1m" in datas
     assert "ccgrampro:new:effort:max" in datas
     assert "ccgrampro:new:mode:plan" in datas
     assert "ccgrampro:new:ws:clone" in datas
@@ -196,10 +196,10 @@ def test_base_keyboard_uses_indices(projects_toml) -> None:
 
 
 def test_render_text_shows_selection(projects_toml) -> None:
-    s = _session(model_key="opus48-1m", effort_key="high", mode="plan")
+    s = _session(model_key="fable5-1m", effort_key="high", mode="plan")
     text = new_session._render_text(s)
     assert "Project A" in text
-    assert "Opus 4.8 · 1M" in text
+    assert "Fable 5 · 1M" in text
     assert "High" in text
     assert "Plan" in text
 

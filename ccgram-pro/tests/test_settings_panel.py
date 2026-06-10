@@ -15,8 +15,8 @@ def _reset():
 
 
 def test_codec_roundtrip_managed_window() -> None:
-    data = sp.encode("m", "opus48-1m", "@5")
-    assert sp.decode(data) == ("m", "opus48-1m", "@5")
+    data = sp.encode("m", "fable5-1m", "@5")
+    assert sp.decode(data) == ("m", "fable5-1m", "@5")
 
 
 def test_codec_roundtrip_foreign_window() -> None:
@@ -30,7 +30,7 @@ def test_codec_open_and_close_have_no_payload() -> None:
 
 
 def test_codec_within_64_bytes_worst_case() -> None:
-    data = sp.encode("m", "opus48-1m", "averylongforeignsession:@99")
+    data = sp.encode("m", "fable5-1m", "averylongforeignsession:@99")
     assert len(data) <= 64
 
 
@@ -49,7 +49,7 @@ def test_build_keyboard_marks_and_callbacks() -> None:
     sidecar = state.WindowSidecar(
         window_id="@5",
         window_creation_epoch=0.0,
-        model="opus48-1m",
+        model="fable5-1m",
         reasoning="max",
         mode="plan",
     )
@@ -59,7 +59,7 @@ def test_build_keyboard_marks_and_callbacks() -> None:
     assert any(t.startswith("● ") and "1M" in t for t in flat_text)
     assert any(t == "● Max" for t in flat_text)
     assert any(t == "● Plan" for t in flat_text)
-    assert "ccgrampro:set:m:opus48:@5" in datas
+    assert "ccgrampro:set:m:fable5:@5" in datas
     assert "ccgrampro:set:e:low:@5" in datas
     assert "ccgrampro:git:menu" in datas
 
@@ -70,7 +70,7 @@ def test_build_keyboard_maps_legacy_values() -> None:
     )
     kb = sp.build_settings_keyboard("@5", sidecar)
     flat_text = [b.text for row in kb.inline_keyboard for b in row]
-    assert any(t == "● Opus 4.8" for t in flat_text)
+    assert any(t == "● Fable 5" for t in flat_text)
     assert any(t == "● X-High" for t in flat_text)
 
 
@@ -84,8 +84,8 @@ async def test_apply_model_sends_slash_model(monkeypatch) -> None:
     import ccgram.tmux_manager as tm
 
     monkeypatch.setattr(tm, "send_to_window", stub)
-    assert await sp.apply_model("@5", "opus48-1m") is True
-    assert sent == ["/model claude-opus-4-8[1m]"]
+    assert await sp.apply_model("@5", "fable5-1m") is True
+    assert sent == ["/model claude-fable-5[1m]"]
 
 
 async def test_apply_effort_sends_slash_effort(monkeypatch) -> None:
@@ -168,10 +168,10 @@ async def test_model_applies_mid_session(monkeypatch) -> None:
     _stub_router(monkeypatch)
     monkeypatch.setattr(sp, "apply_model", _apply_model)
     query = _Query()
-    await sp._apply_change(query, "@5", "m", "opus48-1m")
-    assert applied == ["opus48-1m"]
+    await sp._apply_change(query, "@5", "m", "fable5-1m")
+    assert applied == ["fable5-1m"]
     assert not any("busy" in str(a).lower() for a, _k in query.answers)
-    assert state.load("@5").model == "opus48-1m"
+    assert state.load("@5").model == "fable5-1m"
 
 
 async def test_effort_applies_mid_session(monkeypatch) -> None:

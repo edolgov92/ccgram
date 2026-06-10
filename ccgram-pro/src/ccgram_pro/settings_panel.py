@@ -36,8 +36,8 @@ _installed = False
 
 # (key, button label, claude --model id)
 _MODELS: list[tuple[str, str, str]] = [
-    ("opus48", "Opus 4.8", "claude-opus-4-8"),
-    ("opus48-1m", "Opus 4.8 · 1M", "claude-opus-4-8[1m]"),
+    ("fable5", "Fable 5", "claude-fable-5"),
+    ("fable5-1m", "Fable 5 · 1M", "claude-fable-5[1m]"),
 ]
 _MODEL_ID = {key: model for key, _label, model in _MODELS}
 _EFFORTS: list[tuple[str, str]] = [
@@ -50,8 +50,16 @@ _EFFORTS: list[tuple[str, str]] = [
 _EFFORT_KEYS = {key for key, _ in _EFFORTS}
 _MODES: list[tuple[str, str]] = [("code", "Coding"), ("plan", "Plan")]
 
-# Legacy sidecar values (written before the picker standardised on short keys).
-_MODEL_LEGACY = {"opus": "opus48", "claude-opus-4-8": "opus48"}
+# Legacy sidecar model values → current picker keys. Covers the old short keys
+# and the pre-key model strings; pre-Fable Opus sessions render as the nearest
+# current option so the live panel never shows a raw/unknown value.
+_MODEL_LEGACY = {
+    "opus": "fable5",
+    "opus48": "fable5",
+    "claude-opus-4-8": "fable5",
+    "opus48-1m": "fable5-1m",
+    "claude-opus-4-8[1m]": "fable5-1m",
+}
 _EFFORT_LEGACY = {"extra-high": "xhigh"}
 
 
@@ -125,8 +133,8 @@ def build_settings_keyboard(window_id: str, sidecar: state.WindowSidecar | None)
     # Lazy: PTB types only needed on the handler/send path.
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
-    model = _norm_model(sidecar.model) if sidecar else "opus48"
-    effort = _norm_effort(sidecar.reasoning) if sidecar else "xhigh"
+    model = _norm_model(sidecar.model) if sidecar else "fable5"
+    effort = _norm_effort(sidecar.reasoning) if sidecar else "high"
     mode = "plan" if (sidecar and sidecar.mode == "plan") else "code"
 
     rows = [
@@ -144,8 +152,8 @@ def _menu_text(window_id: str, sidecar: state.WindowSidecar | None) -> str:
     from ccgram.thread_router import thread_router
 
     name = thread_router.get_display_name(window_id) or window_id
-    model = _norm_model(sidecar.model) if sidecar else "opus48"
-    effort = _norm_effort(sidecar.reasoning) if sidecar else "xhigh"
+    model = _norm_model(sidecar.model) if sidecar else "fable5"
+    effort = _norm_effort(sidecar.reasoning) if sidecar else "high"
     mode = "Plan" if (sidecar and sidecar.mode == "plan") else "Coding"
     model_label = next((label for k, label, _m in _MODELS if k == model), model)
     effort_label = next((label for k, label in _EFFORTS if k == effort), effort)

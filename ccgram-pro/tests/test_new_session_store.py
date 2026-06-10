@@ -26,9 +26,9 @@ def test_get_returns_none_when_absent() -> None:
 def test_threads_are_isolated() -> None:
     a = store.create(100, 1, 7, "a", default_mode="coding")
     b = store.create(100, 2, 7, "b", default_mode="coding")
-    a.model_key = "opus48-1m"
+    a.model_key = "fable5-1m"
     assert store.get(100, 2) is b
-    assert b.model_key == "opus48"
+    assert b.model_key == "fable5"
 
 
 def test_append_text_and_combined() -> None:

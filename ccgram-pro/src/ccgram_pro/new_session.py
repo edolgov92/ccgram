@@ -5,8 +5,8 @@ driven by ``projects.toml``:
 
     🆕 New session
     Project:   [🟢 HP Backend] [HP App] …
-    Model:     [● Opus 4.8] [Opus 4.8 · 1M]
-    Reasoning: [Low][Med][High][● X-High][Max]
+    Model:     [● Fable 5] [Fable 5 · 1M]
+    Reasoning: [Low][Med][● High][X-High][Max]
     Mode:      [● Coding][Plan]
     Workspace: [● Current repo][Worktree][Clone]
     Base:      [main ▸]
@@ -52,8 +52,8 @@ _CB_PREFIX = "ccgrampro:new:"
 
 # (key, label, claude --model string)
 _MODELS: list[tuple[str, str, str]] = [
-    ("opus48", "Opus 4.8", "claude-opus-4-8"),
-    ("opus48-1m", "Opus 4.8 · 1M", "claude-opus-4-8[1m]"),
+    ("fable5", "Fable 5", "claude-fable-5"),
+    ("fable5-1m", "Fable 5 · 1M", "claude-fable-5[1m]"),
 ]
 _MODEL_STR = {key: model for key, _label, model in _MODELS}
 
@@ -61,8 +61,8 @@ _MODEL_STR = {key: model for key, _label, model in _MODELS}
 def _resolve_model_key(value: str | None) -> str | None:
     """Map a project's ``default_model`` to a known picker model key.
 
-    Accepts either a picker key (``opus48``, ``opus48-1m``) or the full
-    ``claude --model`` string (``claude-opus-4-8[1m]``). Returns ``None`` when
+    Accepts either a picker key (``fable5``, ``fable5-1m``) or the full
+    ``claude --model`` string (``claude-fable-5[1m]``). Returns ``None`` when
     the value is empty or unrecognized, so the caller keeps the current
     selection — legacy ``default_model = "opus"`` entries are simply ignored
     (the picker default applies) rather than forcing a bad ``--model``.
@@ -100,8 +100,8 @@ _WORKSPACE_KEYS = {key for key, _ in _WORKSPACES}
 # need git; clone auto-downgrades to a filesystem copy).
 _NON_GIT_WORKSPACES = {"current", "clone"}
 
-_DEFAULT_MODEL = "opus48"
-_DEFAULT_EFFORT = "xhigh"
+_DEFAULT_MODEL = "fable5"
+_DEFAULT_EFFORT = "high"
 _BASE_PAGE_SIZE = 6
 _CB_BASE_CURRENT = "cur"
 
@@ -579,7 +579,7 @@ async def _apply_selection(
         if 0 <= idx < len(projects):
             session.project_idx = idx
             # Apply the project's preferred model (e.g. the HP PM workspace
-            # pins Opus 4.8 · 1M). Only applied when it resolves to a known
+            # pins Fable 5 · 1M). Only applied when it resolves to a known
             # model — never clobbers a manual model tap with a bad value.
             model_key = _resolve_model_key(projects[idx].default_model)
             if model_key:
