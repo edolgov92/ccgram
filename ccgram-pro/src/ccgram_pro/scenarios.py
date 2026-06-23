@@ -69,7 +69,7 @@ _REPO_BY_REMOTE: tuple[tuple[str, str], ...] = (
 # ── scenario prompts ──────────────────────────────────────────────────────────
 
 _SELF_REVIEW_PROMPT = """\
-Now you need to do careful and deep code review for your last implemented not pushed changes.
+Now you need to do careful and deep code review for your last implemented not pushed or just pushed changes.
 We need to make sure that the implementation has no issues and no gaps. Nothing is missing; code is professional, production-ready, follows best practices, and our current project rules.
 No need to run any workflows; however, just read again your changes and do a careful self-review.
 Check:
