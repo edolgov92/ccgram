@@ -121,16 +121,81 @@ async def test_finalize_when_no_active() -> None:
     bot.delete_message.assert_not_called()
 
 
-async def test_stop_for_interactive_keeps_awaiting_bubble() -> None:
+async def test_stop_for_interactive_parks_and_keeps_bubble() -> None:
     bot = _make_bot()
     await progress_bubble.start_bubble(window_id="@1", bot=bot, chat_id=1, thread_id=1)
     await progress_bubble.stop_for_interactive("@1", bot)
-    assert not progress_bubble.is_active("@1")
-    # Question surfaced — KEEP a visible "Awaiting your answer" status even with
-    # no progress notes (no summary follows to tell the user the turn ended).
+    # Parked, not torn down: still tracked (so it can self-heal) and showing a
+    # visible "Awaiting your answer" status meanwhile.
+    assert progress_bubble.is_active("@1")
+    assert progress_bubble._bubbles["@1"].waiting is True
     bot.delete_message.assert_not_called()
     final_text = bot.edit_message_text.await_args.kwargs["text"]
     assert "Awaiting your answer" in final_text
+
+
+async def test_stop_for_interactive_orphaned_falls_back_to_finalize() -> None:
+    bot = _make_bot()
+    # No live bubble (restart-orphaned) — still surface the waiting status.
+    await progress_bubble.stop_for_interactive("@gone", bot)
+    assert not progress_bubble.is_active("@gone")
+
+
+async def test_waiting_bubble_self_heals_on_new_progress(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(progress_bubble, "_TICK_INTERVAL_SECONDS", 0.01)
+    transcript = tmp_path / "t.jsonl"
+    transcript.write_text("")
+    bot = _make_bot()
+    await progress_bubble.start_bubble(
+        window_id="@1",
+        bot=bot,
+        chat_id=1,
+        thread_id=1,
+        transcript_path=str(transcript),
+    )
+    await progress_bubble.stop_for_interactive("@1", bot)
+    assert progress_bubble._bubbles["@1"].waiting is True
+    transcript.write_text(_progress_line("Editing auth.py") + "\n")
+    await asyncio.sleep(0.05)
+    assert progress_bubble._bubbles["@1"].waiting is False
+    texts = [c.kwargs["text"] for c in bot.edit_message_text.await_args_list]
+    assert any("Editing auth.py" in t for t in texts)
+
+
+async def test_waiting_bubble_stops_ticking_after_idle_cap(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setattr(progress_bubble, "_TICK_INTERVAL_SECONDS", 0.01)
+    monkeypatch.setattr(progress_bubble, "_WAITING_MAX_SECONDS", -1.0)
+    transcript = tmp_path / "t.jsonl"
+    transcript.write_text("")
+    bot = _make_bot()
+    await progress_bubble.start_bubble(
+        window_id="@1",
+        bot=bot,
+        chat_id=1,
+        thread_id=1,
+        transcript_path=str(transcript),
+    )
+    await progress_bubble.stop_for_interactive("@1", bot)
+    await asyncio.sleep(0.05)
+    # Idle cap exceeded → the tick task exits, but the message is left in place.
+    assert progress_bubble._bubbles["@1"].task.done()
+    bot.delete_message.assert_not_called()
+
+
+async def test_new_turn_retires_waiting_bubble_as_answered() -> None:
+    bot = _make_bot()
+    await progress_bubble.start_bubble(window_id="@1", bot=bot, chat_id=1, thread_id=1)
+    await progress_bubble.stop_for_interactive("@1", bot)
+    assert progress_bubble._bubbles["@1"].waiting is True
+    # A fresh turn (user answered via a button / new message) retires the parked
+    # bubble as a kept "Answered" record and posts a new spinner.
+    await progress_bubble.start_bubble(window_id="@1", bot=bot, chat_id=1, thread_id=1)
+    assert bot.send_message.await_count == 2
+    assert progress_bubble.is_active("@1")
+    texts = [c.kwargs["text"] for c in bot.edit_message_text.await_args_list]
+    assert any("Answered" in t for t in texts)
 
 
 async def test_finalize_keeps_empty_when_flag_set() -> None:

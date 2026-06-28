@@ -41,6 +41,10 @@ _WORKING_HEADER = "⚙️ Working on your request…"
 _DONE_HEADER = "✅ Completed"
 _WAITING_HEADER = "⏳ Awaiting your answer…"
 _STALE_HEADER = "⏹ Stopped"
+_ANSWERED_HEADER = "✅ Answered"
+# A bubble parked on the waiting header keeps watching the transcript this long
+# for the agent to resume before it stops ticking (the message stays in place).
+_WAITING_MAX_SECONDS = 1800.0
 _MAX_VISIBLE_BULLETS = 25
 _TELEGRAM_LIMIT = 4096
 
@@ -55,6 +59,10 @@ class _ActiveBubble:
     transcript_path: str | None = None
     last_offset: int = 0
     bullets: list[str] = field(default_factory=list)
+    # Parked awaiting the user's answer; the tick loop self-heals back to the
+    # "working" spinner when the transcript shows the agent resumed.
+    waiting: bool = False
+    waiting_since: float = 0.0
 
 
 # Per-window active bubble. Keyed by window_id so concurrent topics don't
@@ -169,7 +177,17 @@ async def _refresh_bullets(bubble: _ActiveBubble) -> bool:
 
 
 async def _tick_loop(window_id: str, bot: Any) -> None:
-    """Edit the bubble every tick: refresh elapsed + spinner + new bullets."""
+    """Edit the bubble every tick: refresh elapsed + spinner + new bullets.
+
+    While the bubble is parked in the "⏳ Awaiting your answer…" state, the loop
+    keeps watching the transcript instead of exiting: the moment a fresh progress
+    note appears (the agent resumed — the user answered in plain text, or Claude
+    continued past a transient prompt under bypass-permissions) it self-heals
+    back to the live "Working…" spinner. That is what stops a plain-text answer
+    from stranding a stale "Awaiting…" bubble while work is actually happening.
+    A long idle wait (``_WAITING_MAX_SECONDS``) stops ticking but leaves the
+    message in place.
+    """
     bubble = _bubbles.get(window_id)
     if bubble is None:
         return
@@ -178,7 +196,18 @@ async def _tick_loop(window_id: str, bot: Any) -> None:
         while True:
             await asyncio.sleep(_TICK_INTERVAL_SECONDS)
             tick += 1
-            await _refresh_bullets(bubble)
+            grew = await _refresh_bullets(bubble)
+            if bubble.waiting:
+                if grew:
+                    # Agent resumed — revive the spinner with a fresh clock for
+                    # the resumed turn so it no longer reads as "awaiting".
+                    bubble.waiting = False
+                    bubble.started_at = time.time()
+                    tick = 1
+                elif time.time() - bubble.waiting_since > _WAITING_MAX_SECONDS:
+                    return  # long idle wait — stop ticking, leave the message
+                else:
+                    continue  # stay parked on the waiting header; skip the edit
             text = _render(_format_text(bubble.started_at, tick), bubble.bullets)
             try:
                 await bot.edit_message_text(
@@ -313,8 +342,17 @@ async def start_bubble(
     interrupt or a dismissed question), it's finalized first so a new turn never
     stacks on a stale spinner.
     """
-    if window_id in _bubbles:
-        await finalize_bubble(window_id, bot, header=_STALE_HEADER)
+    existing = _bubbles.get(window_id)
+    if existing is not None:
+        # A bubble from a prior turn is still live. If it was parked awaiting an
+        # answer, retire it as a kept "✅ Answered" record (the user is replying
+        # now); otherwise it leaked from an interrupted turn → "⏹ Stopped".
+        await finalize_bubble(
+            window_id,
+            bot,
+            header=_ANSWERED_HEADER if existing.waiting else _STALE_HEADER,
+            keep_when_empty=existing.waiting,
+        )
     started_at = time.time()
     start_offset = (
         await asyncio.to_thread(_file_size, transcript_path) if transcript_path else 0
@@ -426,16 +464,35 @@ async def sweep_stale_bubbles(bot: Any) -> int:
 
 
 async def stop_for_interactive(window_id: str, bot: Any) -> None:
-    """Finalize the bubble because Claude is now awaiting the user's input.
+    """Park the bubble in the "⏳ Awaiting your answer…" state — do NOT tear it down.
 
-    Called when an AskUserQuestion / ExitPlanMode prompt is surfaced — the spinner
-    must stop (Claude is blocked on the user, not working) so it never hangs on
-    "Working…" while a question is pending or after it's dismissed. KEEP it even
-    with no progress notes — "⏳ Awaiting your answer…" is the signal that the
-    turn finished and the agent is now waiting on the user (no summary follows
-    to convey that), so deleting it would leave the user with no status at all.
+    Called when an AskUserQuestion / ExitPlanMode prompt is surfaced: the spinner
+    must stop (Claude is blocked on the user, not working). But the bubble stays
+    tracked and its tick loop keeps watching the transcript, so if the agent
+    resumes — the user answers in plain text, or Claude continues past a
+    transient prompt under bypass-permissions — it self-heals back to "Working…"
+    instead of stranding a stale "Awaiting…" message while work happens (the bug
+    plain-text questions exposed). The waiting header stays visible meanwhile
+    (no summary follows to tell the user the turn paused). When no live bubble
+    exists (restart-orphaned), fall back to a best-effort finalize so the user
+    still sees the waiting status.
     """
-    await finalize_bubble(window_id, bot, header=_WAITING_HEADER, keep_when_empty=True)
+    bubble = _bubbles.get(window_id)
+    if bubble is None:
+        await finalize_bubble(
+            window_id, bot, header=_WAITING_HEADER, keep_when_empty=True
+        )
+        return
+    bubble.waiting = True
+    bubble.waiting_since = time.time()
+    with contextlib.suppress(Exception):
+        await _refresh_bullets(bubble)
+    with contextlib.suppress(Exception):
+        await bot.edit_message_text(
+            chat_id=bubble.chat_id,
+            message_id=bubble.message_id,
+            text=_render(_WAITING_HEADER, bubble.bullets),
+        )
 
 
 def is_active(window_id: str) -> bool:
