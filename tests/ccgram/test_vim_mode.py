@@ -1,6 +1,6 @@
 """Tests for vim mode detection and auto-INSERT recovery in tmux_manager."""
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -335,6 +335,76 @@ class TestSendLiteralVimIntegration:
         # Both calls should complete; lock ensures no interleaving of probe+send
         assert order.count("vim_start") == 2
         assert order.count("vim_end") == 2
+
+
+# ── Multi-line bracketed-paste delivery ────────────────────────────────
+
+
+class TestMultilinePaste:
+    @pytest.fixture()
+    def manager(self):
+        return _make_manager()
+
+    async def test_multiline_text_uses_bracketed_paste(self, manager):
+        """A message with newlines is pasted (not typed) then submitted."""
+        _vim_state["@1"] = False
+        with (
+            patch.object(manager, "_ensure_vim_insert_mode", new_callable=AsyncMock),
+            patch.object(manager, "_paste_buffer_send", return_value=True) as paste,
+            patch.object(manager, "_pane_send", return_value=True) as send,
+            patch("ccgram.tmux_manager.asyncio.sleep", new_callable=AsyncMock),
+        ):
+            result = await manager._send_literal_then_enter("@1", "line1\nline2\nl3")
+        assert result is True
+        paste.assert_called_once_with("@1", "line1\nline2\nl3")
+        # Text is never typed literally — only the submit Enter goes through.
+        send.assert_called_once_with("@1", "", enter=True, literal=False)
+
+    async def test_singleline_text_typed_literally_not_pasted(self, manager):
+        """A single-line message keeps the literal type-then-Enter path."""
+        _vim_state["@1"] = False
+        with (
+            patch.object(manager, "_ensure_vim_insert_mode", new_callable=AsyncMock),
+            patch.object(manager, "_paste_buffer_send", return_value=True) as paste,
+            patch.object(manager, "_pane_send", return_value=True) as send,
+            patch("ccgram.tmux_manager.asyncio.sleep", new_callable=AsyncMock),
+        ):
+            result = await manager._send_literal_then_enter("@1", "hello")
+        assert result is True
+        paste.assert_not_called()
+        assert send.call_args_list[0].args == ("@1", "hello")
+        assert send.call_args_list[0].kwargs == {"enter": False, "literal": True}
+
+    async def test_multiline_paste_failure_propagates_and_skips_enter(self, manager):
+        """If the paste fails the send reports failure and never submits."""
+        _vim_state["@1"] = False
+        with (
+            patch.object(manager, "_ensure_vim_insert_mode", new_callable=AsyncMock),
+            patch.object(manager, "_paste_buffer_send", return_value=False),
+            patch.object(manager, "_pane_send", return_value=True) as send,
+            patch("ccgram.tmux_manager.asyncio.sleep", new_callable=AsyncMock),
+        ):
+            result = await manager._send_literal_then_enter("@1", "a\nb")
+        assert result is False
+        send.assert_not_called()
+
+    def test_paste_buffer_send_issues_load_then_bracketed_paste(self, manager):
+        with patch("ccgram.tmux_manager.subprocess.run") as run:
+            run.return_value = MagicMock(returncode=0)
+            ok = manager._paste_buffer_send("@1", "multi\nline")
+        assert ok is True
+        cmds = [c.args[0] for c in run.call_args_list]
+        assert cmds[0][:3] == ["tmux", "load-buffer", "-b"]
+        assert cmds[1][:2] == ["tmux", "paste-buffer"]
+        assert "-p" in cmds[1]  # bracketed paste
+        assert "-d" in cmds[1]  # delete buffer after
+        assert "test:@1" in cmds[1]  # session:window target
+
+    def test_paste_buffer_send_load_failure_returns_false(self, manager):
+        with patch("ccgram.tmux_manager.subprocess.run") as run:
+            run.return_value = MagicMock(returncode=1)
+            ok = manager._paste_buffer_send("@1", "a\nb")
+        assert ok is False
 
 
 # ── Polling + cleanup integration ──────────────────────────────────────

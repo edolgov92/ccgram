@@ -618,6 +618,59 @@ class TmuxManager:
             logger.exception("Failed to send keys to foreign window %s", target)
             return False
 
+    def _paste_buffer_send(self, window_id: str, text: str) -> bool:
+        """Deliver text to a pane as a bracketed paste via a tmux buffer.
+
+        Typing multi-line text literally (``send-keys -l``) makes the agent TUI
+        treat each embedded newline as a *submit*, so a multi-paragraph message
+        is fragmented or dropped entirely and the agent receives nothing. A
+        bracketed paste (``paste-buffer -p``) wraps the text in paste-mode
+        markers, so the TUI inserts it verbatim as one multi-line input; the
+        caller submits it with a separate Enter. Returns False on any failure
+        so the send is reported as failed rather than silently lost.
+        """
+        if is_foreign_window(window_id):
+            target = window_id
+        else:
+            target = f"{self.session_name}:{window_id}"
+        buffer_name = "ccgram-paste-" + window_id.replace("@", "").replace(":", "_")
+        try:
+            load = subprocess.run(
+                ["tmux", "load-buffer", "-b", buffer_name, "-"],
+                input=text.encode("utf-8"),
+                timeout=5,
+                check=False,
+            )
+            if load.returncode != 0:
+                logger.warning(
+                    "load-buffer failed for window %s (rc=%s)",
+                    window_id,
+                    load.returncode,
+                )
+                return False
+            paste = subprocess.run(
+                ["tmux", "paste-buffer", "-d", "-p", "-b", buffer_name, "-t", target],
+                timeout=5,
+                check=False,
+            )
+            if paste.returncode != 0:
+                logger.warning(
+                    "paste-buffer failed for window %s (rc=%s)",
+                    window_id,
+                    paste.returncode,
+                )
+                # paste-buffer -d only deletes on success; clean up on failure.
+                subprocess.run(
+                    ["tmux", "delete-buffer", "-b", buffer_name],
+                    timeout=5,
+                    check=False,
+                )
+                return False
+            return True
+        except subprocess.TimeoutExpired, OSError:
+            logger.exception("Failed to paste text to window %s", window_id)
+            return False
+
     async def _ensure_vim_insert_mode(self, window_id: str) -> None:
         """Detect vim NORMAL mode and auto-enter INSERT before sending text.
 
@@ -691,6 +744,17 @@ class TmuxManager:
     async def _send_literal_then_enter_locked(self, window_id: str, text: str) -> bool:
         """Inner send implementation (must be called under per-window lock)."""
         await self._ensure_vim_insert_mode(window_id)
+
+        # Multi-line text: deliver as a bracketed paste so embedded newlines are
+        # kept as literal text instead of being taken as submits (which would
+        # fragment or drop a multi-paragraph message). Then submit with Enter.
+        if "\n" in text:
+            if not await asyncio.to_thread(self._paste_buffer_send, window_id, text):
+                return False
+            await asyncio.sleep(0.5)
+            return await asyncio.to_thread(
+                self._pane_send, window_id, "", enter=True, literal=False
+            )
 
         if text.startswith("!"):
             if not await asyncio.to_thread(
