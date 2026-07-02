@@ -38,6 +38,8 @@ _installed = False
 _MODELS: list[tuple[str, str, str]] = [
     ("opus48", "Opus 4.8", "claude-opus-4-8"),
     ("opus48-1m", "Opus 4.8 · 1M", "claude-opus-4-8[1m]"),
+    ("fable5", "Fable 5", "claude-fable-5"),
+    ("fable5-1m", "Fable 5 · 1M", "claude-fable-5[1m]"),
 ]
 _MODEL_ID = {key: model for key, _label, model in _MODELS}
 _EFFORTS: list[tuple[str, str]] = [
@@ -51,7 +53,12 @@ _EFFORT_KEYS = {key for key, _ in _EFFORTS}
 _MODES: list[tuple[str, str]] = [("code", "Coding"), ("plan", "Plan")]
 
 # Legacy sidecar values (written before the picker standardised on short keys).
-_MODEL_LEGACY = {"opus": "opus48", "claude-opus-4-8": "opus48"}
+_MODEL_LEGACY = {
+    "opus": "opus48",
+    "claude-opus-4-8": "opus48",
+    "fable": "fable5",
+    "claude-fable-5": "fable5",
+}
 _EFFORT_LEGACY = {"extra-high": "xhigh"}
 
 

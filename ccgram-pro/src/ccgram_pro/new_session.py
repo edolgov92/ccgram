@@ -54,6 +54,8 @@ _CB_PREFIX = "ccgrampro:new:"
 _MODELS: list[tuple[str, str, str]] = [
     ("opus48", "Opus 4.8", "claude-opus-4-8"),
     ("opus48-1m", "Opus 4.8 · 1M", "claude-opus-4-8[1m]"),
+    ("fable5", "Fable 5", "claude-fable-5"),
+    ("fable5-1m", "Fable 5 · 1M", "claude-fable-5[1m]"),
 ]
 _MODEL_STR = {key: model for key, _label, model in _MODELS}
 
