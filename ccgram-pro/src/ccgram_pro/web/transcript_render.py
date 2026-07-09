@@ -25,6 +25,7 @@ from __future__ import annotations
 import html
 import json
 import re
+from collections import Counter
 
 from ..output_pipeline.transcript_events import TurnEvent
 
@@ -244,7 +245,7 @@ def _render_tool_result(ev: TurnEvent) -> str:
     return (
         f'<div class="row tool">'
         '  <div class="gutter"></div>'
-        f'  <details class="bubble {cls}" open>'
+        f'  <details class="bubble {cls}">'
         f"    <summary>{label}</summary>"
         f"    {body}"
         "  </details>"
@@ -288,25 +289,70 @@ def _render_assistant(ev: TurnEvent) -> str:
     )
 
 
+_SYSTEM_KINDS = frozenset({"thinking", "tool_use", "tool_result"})
+
+
+def _render_system_event(ev: TurnEvent) -> str:
+    if ev.kind == "thinking":
+        return _render_thinking(ev)
+    if ev.kind == "tool_use":
+        return _render_tool_use(ev)
+    return _render_tool_result(ev)
+
+
+def _group_summary(buf: list[TurnEvent]) -> tuple[int, str]:
+    """Return ``(#steps, 'Bash ×2, Read, Thinking')`` for a run of system events.
+
+    Steps counts actions (tool calls + thinking blocks), not their outputs.
+    """
+    counts: Counter[str] = Counter()
+    for ev in buf:
+        if ev.kind == "tool_use":
+            counts[(ev.tool_name or "Tool").title()] += 1
+        elif ev.kind == "thinking":
+            counts["Thinking"] += 1
+    steps = sum(counts.values()) or len(buf)
+    label = ", ".join(f"{n} ×{c}" if c > 1 else n for n, c in counts.items())
+    return steps, label
+
+
 def render_rows_html(events: list[TurnEvent]) -> str:
     """Render just the event rows (no ``.transcript`` container).
 
-    Used both for the initial page (inside the container) and the
-    infinite-scroll fragment endpoint (prepended into the existing
-    container client-side).
+    Consecutive background/system events (thinking, tool calls, tool results)
+    are wrapped in ONE collapsed ``.sysgroup`` so they don't bury the actual
+    conversation; expanding the group reveals the individual steps, each still
+    independently collapsible. Used for the initial page and the infinite-scroll
+    fragment (grouping is per-fragment).
     """
     parts: list[str] = []
+    buf: list[TurnEvent] = []
+
+    def flush() -> None:
+        if not buf:
+            return
+        steps, label = _group_summary(buf)
+        suffix = f" · {html.escape(label)}" if label else ""
+        inner = "\n".join(_render_system_event(ev) for ev in buf)
+        parts.append(
+            '<details class="sysgroup">'
+            f'<summary><span class="sysgroup-badge">{steps}</span>'
+            f'<span class="sysgroup-label">⚙️ background steps{suffix}</span>'
+            "</summary>"
+            f'<div class="sysgroup-body">{inner}</div></details>'
+        )
+        buf.clear()
+
     for ev in events:
+        if ev.kind in _SYSTEM_KINDS:
+            buf.append(ev)
+            continue
+        flush()
         if ev.kind == "user":
             parts.append(_render_user(ev))
         elif ev.kind == "assistant":
             parts.append(_render_assistant(ev))
-        elif ev.kind == "thinking":
-            parts.append(_render_thinking(ev))
-        elif ev.kind == "tool_use":
-            parts.append(_render_tool_use(ev))
-        elif ev.kind == "tool_result":
-            parts.append(_render_tool_result(ev))
+    flush()
     return "\n".join(parts)
 
 
@@ -337,6 +383,25 @@ def transcript_css() -> str:
   .user-avatar { background: linear-gradient(140deg, #2b3242, #363d4e); }
   .tool-avatar { background: linear-gradient(140deg, #3a2f12, #4a3a14); }
   .gutter { flex: 0 0 32px; }
+
+  /* Consecutive background/system steps collapsed into one muted group so the
+     conversation isn't buried. Expand → the steps; each is still collapsible. */
+  .sysgroup { border: 1px dashed var(--border); border-radius: var(--radius, 12px);
+              background: var(--bg); margin: 2px 0; }
+  .sysgroup > summary { list-style: none; cursor: pointer; user-select: none;
+              padding: 8px 12px; display: flex; align-items: center; gap: 9px;
+              color: var(--muted); font-size: 13px; }
+  .sysgroup > summary::-webkit-details-marker { display: none; }
+  .sysgroup > summary::before { content: "▸"; color: var(--faint);
+              transition: transform .15s ease; }
+  .sysgroup[open] > summary::before { transform: rotate(90deg); }
+  .sysgroup[open] > summary { color: var(--fg);
+              border-bottom: 1px solid var(--border-soft); }
+  .sysgroup-badge { background: var(--elevated); color: var(--muted);
+              border: 1px solid var(--border-soft); border-radius: 10px;
+              padding: 0 8px; min-width: 18px; text-align: center;
+              font-weight: 600; font-size: 12px; }
+  .sysgroup-body { display: flex; flex-direction: column; gap: 14px; padding: 12px; }
 
   .bubble { border-radius: var(--radius); padding: 11px 15px; max-width: 80%;
             border: 1px solid var(--border-soft); background: var(--surface);
