@@ -64,7 +64,18 @@ def _build_keyboard(
         # Lazy: scenarios installs alongside; import at send time.
         from ..scenarios import scenarios_button_for_window
 
-        # 🎬 Scenarios sits just before ⚙️ Settings on the action row.
+        # Lazy: config for the signing bot token.
+        from ccgram.config import config
+
+        # Lazy: live link builder installs alongside; import at send time.
+        from ..share.links import make_live_url
+
+        # 🔴 Live activity view (real-time), then 🎬 Scenarios, then ⚙️ Settings.
+        live_url = make_live_url(
+            bot_token=config.telegram_bot_token, window_id=window_id
+        )
+        if live_url:
+            row.append(InlineKeyboardButton("🔴", url=live_url))
         row.append(scenarios_button_for_window(window_id))
         row.append(button_for_window(window_id))
     return InlineKeyboardMarkup([row]) if row else None

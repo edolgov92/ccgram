@@ -26,6 +26,7 @@ from . import __version__
 from .web import (
     register_compose_routes,
     register_diff_routes,
+    register_live_routes,
     register_plan_routes,
     register_view_routes,
 )
@@ -54,6 +55,7 @@ def make_factory(
         register_diff_routes(app)
         register_compose_routes(app)
         register_plan_routes(app)
+        register_live_routes(app)
         logger.debug("ccgram-pro %s miniapp factory built app", __version__)
         return app
 

@@ -16,6 +16,7 @@ from .tokens import (
     DEFAULT_SHARE_TTL_SECONDS,
     InvalidShareToken,
     sign_compose_token,
+    sign_live_token,
     sign_share_token,
     verify_share_token,
 )
@@ -83,6 +84,18 @@ def make_compose_url(*, bot_token: str, window_id: str) -> str | None:
     return f"{base.rstrip('/')}/compose/{token}"
 
 
+def make_live_url(*, bot_token: str, window_id: str) -> str | None:
+    """Build the ``/live`` URL for *window_id* (real-time activity view).
+
+    Returns ``None`` when no base URL is configured.
+    """
+    base = _miniapp_base_url()
+    if not base:
+        return None
+    token = sign_live_token(bot_token=bot_token, window_id=window_id)
+    return f"{base.rstrip('/')}/live/{token}"
+
+
 def resolve_token(token: str, *, bot_token: str) -> ShareRecord:
     """Verify *token* and return the referenced share. Raises on failure."""
     payload = verify_share_token(token, bot_token=bot_token)
@@ -93,6 +106,7 @@ __all__ = [
     "DEFAULT_SHARE_TTL_SECONDS",
     "InvalidShareToken",
     "make_compose_url",
+    "make_live_url",
     "make_plan_url",
     "make_share_url",
     "resolve_token",

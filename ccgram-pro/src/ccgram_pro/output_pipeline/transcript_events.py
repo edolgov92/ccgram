@@ -64,27 +64,14 @@ _MAX_TRANSCRIPT_LINES = 4000
 _MAX_STORED_EVENTS = 600
 
 
-def extract_events(
-    transcript_path: str, *, max_lines: int = _MAX_TRANSCRIPT_LINES
-) -> list[TurnEvent]:
-    """Return structured events for the recent transcript window.
+def events_from_lines(lines: list[str]) -> list[TurnEvent]:
+    """Parse raw JSONL transcript lines into structured events (chronological).
 
-    Reads the last *max_lines* JSONL entries — enough for a long
-    multi-message turn while bounding work on a huge transcript. Order is
-    preserved (chronological). The result is capped to the newest
-    ``_MAX_STORED_EVENTS`` so the share record stays a sane size; the view
-    paginates within whatever is stored. ``tool_result`` blocks carry
-    their ``tool_use_id`` so the renderer can collapse them under the
-    matching call.
+    Shared by the saved-share path (:func:`extract_events`) and the live view's
+    incremental tail. Malformed lines are skipped.
     """
-    try:
-        raw = Path(transcript_path).read_text(encoding="utf-8", errors="replace")
-    except OSError as exc:
-        logger.warning("could not read transcript %s: %s", transcript_path, exc)
-        return []
-
     events: list[TurnEvent] = []
-    for raw_line in raw.splitlines()[-max_lines:]:
+    for raw_line in lines:
         try:
             entry = json.loads(raw_line)
         except json.JSONDecodeError:
@@ -139,9 +126,27 @@ def extract_events(
                         is_error=bool(block.get("is_error", False)),
                     )
                 )
-    # Cap to the newest N so the share JSON stays bounded; the view
-    # paginates within whatever is stored.
-    return events[-_MAX_STORED_EVENTS:]
+    return events
+
+
+def extract_events(
+    transcript_path: str, *, max_lines: int = _MAX_TRANSCRIPT_LINES
+) -> list[TurnEvent]:
+    """Return structured events for the recent transcript window.
+
+    Reads the last *max_lines* JSONL entries — enough for a long multi-message
+    turn while bounding work on a huge transcript. Order is preserved
+    (chronological). The result is capped to the newest ``_MAX_STORED_EVENTS`` so
+    the share record stays a sane size; the view paginates within whatever is
+    stored. ``tool_result`` blocks carry their ``tool_use_id`` so the renderer
+    can collapse them under the matching call.
+    """
+    try:
+        raw = Path(transcript_path).read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        logger.warning("could not read transcript %s: %s", transcript_path, exc)
+        return []
+    return events_from_lines(raw.splitlines()[-max_lines:])[-_MAX_STORED_EVENTS:]
 
 
 def _role_kind(role: str) -> str:

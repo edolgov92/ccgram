@@ -23,6 +23,10 @@ DEFAULT_SHARE_TTL_SECONDS = 3 * 24 * 60 * 60  # 3 days
 # lived so a leaked link expires fast.
 COMPOSE_PURPOSE = "compose"
 DEFAULT_COMPOSE_TTL_SECONDS = 10 * 60  # 10 minutes
+# Live tokens authorise the read-only live-activity view of one window. Stable
+# per-window link the user re-opens, so a long TTL; read-only so no write risk.
+LIVE_PURPOSE = "live"
+DEFAULT_LIVE_TTL_SECONDS = 30 * 24 * 60 * 60  # 30 days
 
 
 class InvalidShareToken(Exception):
@@ -154,3 +158,32 @@ def verify_compose_token(
     return _verify(
         token, bot_token=bot_token, expected_purpose=COMPOSE_PURPOSE, now=now
     )
+
+
+def sign_live_token(
+    *,
+    bot_token: str,
+    window_id: str,
+    ttl: int = DEFAULT_LIVE_TTL_SECONDS,
+    now: float | None = None,
+) -> str:
+    """Mint a window-scoped token for the read-only live-activity view.
+
+    The window id rides the token's ``share_id`` field; the ``live`` purpose
+    keeps it from being replayed as a share (read a saved turn) or compose
+    (authorise a PR).
+    """
+    return _sign(
+        bot_token=bot_token,
+        share_id=window_id,
+        purpose=LIVE_PURPOSE,
+        ttl=ttl,
+        now=now,
+    )
+
+
+def verify_live_token(
+    token: str, *, bot_token: str, now: float | None = None
+) -> ShareTokenPayload:
+    """Verify a live token (``payload.share_id`` is the window id)."""
+    return _verify(token, bot_token=bot_token, expected_purpose=LIVE_PURPOSE, now=now)

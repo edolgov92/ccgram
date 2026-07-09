@@ -20,7 +20,13 @@ from .store import (
     prune_expired,
     save_share,
 )
-from .tokens import InvalidShareToken, sign_share_token, verify_share_token
+from .tokens import (
+    InvalidShareToken,
+    sign_live_token,
+    sign_share_token,
+    verify_live_token,
+    verify_share_token,
+)
 
 __all__ = [
     "InvalidShareToken",
@@ -29,6 +35,8 @@ __all__ = [
     "load_share",
     "prune_expired",
     "save_share",
+    "sign_live_token",
     "sign_share_token",
+    "verify_live_token",
     "verify_share_token",
 ]
