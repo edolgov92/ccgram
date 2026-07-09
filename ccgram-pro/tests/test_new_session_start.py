@@ -24,7 +24,7 @@ def projects_toml(tmp_path):
     proj = tmp_path / "proj"
     proj.mkdir()
     (layer_dir() / "projects.toml").write_text(
-        f'[[project]]\npath = "{proj}"\nlabel = "Proj"\n'
+        f'[[project]]\npath = "{proj}"\nlabel = "Proj"\nshort_name = "proj-x"\n'
     )
     return proj
 
@@ -60,11 +60,18 @@ def _capture_cwb(monkeypatch) -> dict[str, Any]:
     captured: dict[str, Any] = {}
 
     async def stub(
-        query, user_id, selected_path, provider_name, approval_mode, context
+        query,
+        user_id,
+        selected_path,
+        provider_name,
+        approval_mode,
+        context,
+        window_name=None,
     ):  # noqa: ARG001
         captured["cwd"] = selected_path
         captured["provider"] = provider_name
         captured["approval_mode"] = approval_mode
+        captured["window_name"] = window_name
         captured["override_model"] = new_session._override_model
         captured["override_plan"] = new_session._override_plan
 
@@ -87,6 +94,8 @@ async def test_current_repo_strategy(projects_toml, monkeypatch) -> None:
     s.workspace_strategy = "current"
     await new_session._handle_start(_Query(), _update(), _ctx(), s)
     assert captured["cwd"] == str(projects_toml)
+    # project short_name is threaded through as the window/topic base name
+    assert captured["window_name"] == "proj-x"
     sidecar = state.load("@7")
     assert sidecar is not None
     assert sidecar.workspace_strategy == "current"

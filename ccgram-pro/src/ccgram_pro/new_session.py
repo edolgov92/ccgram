@@ -819,7 +819,13 @@ async def _handle_start(
         _override_plan = session.mode == "plan"
     try:
         await _create_window_and_bind(
-            query, user_id, str(cwd), provider, approval_mode, context
+            query,
+            user_id,
+            str(cwd),
+            provider,
+            approval_mode,
+            context,
+            window_name=(project.short_name or None),
         )
     finally:
         _override_model = None

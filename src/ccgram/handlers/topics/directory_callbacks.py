@@ -905,11 +905,16 @@ async def _create_window_and_bind(  # noqa: PLR0915
     provider_name: str,
     approval_mode: str,
     context: ContextTypes.DEFAULT_TYPE,
+    window_name: str | None = None,
 ) -> None:
     """Create a tmux window, bind to the pending topic, and forward pending text.
 
     Shared by _handle_mode_select (after mode picker) and _handle_provider_select
     (when mode picker is skipped for providers without YOLO flags).
+
+    ``window_name``, when set, overrides the default (directory-name) window/topic
+    name — the caller passes a per-project base like ``hp-app`` so topics are
+    distinguishable across projects; the ``-N`` dedup suffix is still applied.
     """
     # Lazy: providers package heavy bootstrap
     from ccgram.providers import resolve_launch_command
@@ -921,7 +926,7 @@ async def _create_window_and_bind(  # noqa: PLR0915
     launch_command = resolve_launch_command(provider_name, approval_mode=approval_mode)
 
     success, message, created_wname, created_wid = await tmux_manager.create_window(
-        selected_path, launch_command=launch_command
+        selected_path, launch_command=launch_command, window_name=window_name
     )
     if not success:
         await _abort_topic_creation(query, message, context)

@@ -76,6 +76,17 @@ default_preamble = "be careful"
     assert projects[1].default_preamble == "be careful"
 
 
+def test_load_projects_reads_short_name(tmp_path: Path) -> None:
+    f = tmp_path / "projects.toml"
+    f.write_text(
+        '[[project]]\npath = "/tmp/a"\nlabel = "A"\nshort_name = "hp-app"\n'
+        '\n[[project]]\npath = "/tmp/b"\nlabel = "B"\n'
+    )
+    projects = load_projects(f)
+    assert projects[0].short_name == "hp-app"
+    assert projects[1].short_name == ""  # default when the key is absent
+
+
 def test_load_projects_expands_user(tmp_path: Path) -> None:
     f = tmp_path / "projects.toml"
     f.write_text('[[project]]\npath = "~/foo"\nlabel = "F"\n')

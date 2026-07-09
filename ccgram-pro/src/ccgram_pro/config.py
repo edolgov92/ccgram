@@ -121,6 +121,10 @@ class Project:
     ``install_command``, when set, overrides the workspace's
     auto-detected install command (``pnpm install``, ``uv sync``, …).
     Set to the empty string to skip install entirely.
+    ``short_name``, when set, is the base name for topics/windows created for
+    this project (e.g. ``hp-app`` → ``hp-app``, ``hp-app-2`` …), so topics are
+    distinguishable across projects instead of colliding on ``app``/``backend``.
+    Empty falls back to the project directory name.
     """
 
     path: Path
@@ -129,6 +133,7 @@ class Project:
     default_reasoning: str = "extra-high"
     default_preamble: str | None = None
     install_command: str | None = None
+    short_name: str = ""
 
 
 def load_projects(path: Path | None = None) -> list[Project]:
@@ -170,6 +175,7 @@ def load_projects(path: Path | None = None) -> list[Project]:
                 default_reasoning=str(entry.get("default_reasoning", "extra-high")),
                 default_preamble=entry.get("default_preamble"),
                 install_command=install_command,
+                short_name=str(entry.get("short_name", "")),
             )
         )
     return projects
