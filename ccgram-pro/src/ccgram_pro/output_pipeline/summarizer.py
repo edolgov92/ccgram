@@ -299,6 +299,13 @@ async def _post_summaries_to_bindings(
     if prior is not None and prior.last_summary_messages:
         await _strip_prior_summary_buttons(bot, prior.last_summary_messages)
 
+    # Append the usage/limits footer (context% + account 5h/weekly/Fable) to the
+    # bottom of the summary. build_footer never raises and returns "" on failure.
+    # Lazy: usage pulls httpx only on its own path.
+    from ..usage import build_footer
+
+    summary_text = summary_text + await build_footer(window_id)
+
     new_entries: list[dict[str, int]] = []
     for _user_id, thread_id, chat_id in bindings:
         last_id = await _post_summary_message(
