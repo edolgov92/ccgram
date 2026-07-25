@@ -52,8 +52,8 @@ _CB_PREFIX = "ccgrampro:new:"
 
 # (key, label, claude --model string)
 _MODELS: list[tuple[str, str, str]] = [
-    ("opus48", "Opus 4.8", "claude-opus-4-8"),
-    ("opus48-1m", "Opus 4.8 · 1M", "claude-opus-4-8[1m]"),
+    ("opus5", "Opus 5", "claude-opus-5"),
+    ("opus5-1m", "Opus 5 · 1M", "claude-opus-5[1m]"),
     ("fable5", "Fable 5", "claude-fable-5"),
     ("fable5-1m", "Fable 5 · 1M", "claude-fable-5[1m]"),
 ]
@@ -102,7 +102,7 @@ _WORKSPACE_KEYS = {key for key, _ in _WORKSPACES}
 # need git; clone auto-downgrades to a filesystem copy).
 _NON_GIT_WORKSPACES = {"current", "clone"}
 
-_DEFAULT_MODEL = "opus48"
+_DEFAULT_MODEL = "opus5"
 _DEFAULT_EFFORT = "xhigh"
 _BASE_PAGE_SIZE = 6
 _CB_BASE_CURRENT = "cur"

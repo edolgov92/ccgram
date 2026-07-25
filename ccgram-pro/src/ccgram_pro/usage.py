@@ -136,10 +136,11 @@ def format_account_limits(usage: dict[str, Any]) -> str:
 
 
 def _context_window(model: str) -> int:
-    """Context-window size for a model key/id. Opus/Sonnet default to 200k; the
-    ``[1m]`` variants and Fable are 1M."""
+    """Context-window size for a model key/id. Opus 5 and Fable are natively 1M
+    (as are the explicit ``[1m]`` variants); legacy Opus 4.8 without ``[1m]`` is
+    200k."""
     lowered = (model or "").lower()
-    if "1m" in lowered or "fable" in lowered:
+    if any(tag in lowered for tag in ("1m", "fable", "opus5", "opus-5")):
         return 1_000_000
     return 200_000
 

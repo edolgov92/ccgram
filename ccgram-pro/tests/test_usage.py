@@ -76,8 +76,11 @@ def test_fmt_reset_bad_input():
 
 
 def test_context_window_mapping():
-    assert usage._context_window("opus48") == 200_000
+    assert usage._context_window("opus48") == 200_000  # legacy Opus 4.8
     assert usage._context_window("opus48-1m") == 1_000_000
+    assert usage._context_window("opus5") == 1_000_000  # Opus 5 native 1M
+    assert usage._context_window("claude-opus-5") == 1_000_000
+    assert usage._context_window("opus5-1m") == 1_000_000
     assert usage._context_window("fable5") == 1_000_000
     assert usage._context_window("claude-fable-5") == 1_000_000
     assert usage._context_window("") == 200_000

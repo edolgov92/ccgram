@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 # bit" without leaking state for a topic the user never finished.
 _PICKER_TTL_SECONDS = 1800.0
 
-_DEFAULT_MODEL = "opus48"
+_DEFAULT_MODEL = "opus5"
 _DEFAULT_EFFORT = "xhigh"
 
 
