@@ -37,6 +37,12 @@ logger = structlog.get_logger()
 # ── Timing constants ──────────────────────────────────────────────────────
 
 TOPIC_CHECK_INTERVAL = 60.0  # seconds
+# A topic probe that hits MAX_PROBE_FAILURES transient errors suspends that
+# window's probe indefinitely (see TopicLifecycleStrategy.should_skip_probe).
+# Clear the counters this often so a suspended window is re-probed — and its
+# tmux window killed — if its topic was deleted while the probe was suspended.
+# Without this, suspended windows leak forever (dead topics, live sessions).
+_PROBE_RESET_INTERVAL = 30 * 60.0  # seconds
 
 
 # ── Broker integration ────────────────────────────────────────────────────
@@ -153,6 +159,14 @@ async def run_periodic_tasks(
         await prune_stale_state(all_windows)
         await probe_topic_existence(client)
         log_throttle_sweep()
+
+    if now - timers.get("probe_reset", 0.0) >= _PROBE_RESET_INTERVAL:
+        timers["probe_reset"] = now
+        # Lazy: singleton imported per-tick so tests can swap it.
+        from .polling_state import terminal_poll_state
+
+        # Un-suspend probe-skipped windows so a since-deleted topic gets cleaned.
+        terminal_poll_state.reset_all_probe_failures()
 
     if now - timers["broker"] >= BROKER_CYCLE_INTERVAL:
         timers["broker"] = now
