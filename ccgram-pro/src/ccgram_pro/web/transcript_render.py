@@ -27,6 +27,7 @@ import json
 import re
 from collections import Counter
 
+from ..model_names import display_name as model_display_name
 from ..output_pipeline.transcript_events import TurnEvent
 
 # How many characters of a tool result to show before folding the rest.
@@ -278,11 +279,19 @@ def _render_user(ev: TurnEvent) -> str:
 
 
 def _render_assistant(ev: TurnEvent) -> str:
+    # Surface the model that actually answered — it can differ from the selected
+    # one (fallback to Opus when a scoped model is rate-limited). Muted, inline.
+    model = model_display_name(ev.model)
+    model_tag = (
+        f'<span class="model-tag" title="{html.escape(ev.model)}">{html.escape(model)}</span>'
+        if model
+        else ""
+    )
     return (
         '<div class="row assistant">'
         '  <div class="gutter"><span class="avatar claude-avatar">✦</span></div>'
         '  <div class="bubble assistant-bubble">'
-        '    <div class="role-label">Claude</div>'
+        f'    <div class="role-label">Claude{model_tag}</div>'
         f'    <div class="content">{_render_message_text(ev.text)}</div>'
         "  </div>"
         "</div>"
@@ -424,6 +433,12 @@ def transcript_css() -> str:
   .prewrap > .copy-btn { top: 5px; right: 5px; }
   .role-label { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.06em;
                 color: var(--faint); margin-bottom: 5px; font-weight: 600; }
+  /* The real answering model, muted, beside the role label (may differ from
+     the selected model when Claude Code falls back). */
+  .model-tag { text-transform: none; letter-spacing: 0; font-weight: 600;
+               color: var(--muted); margin-left: 7px;
+               padding: 1px 7px; border-radius: 999px;
+               border: 1px solid var(--border-soft); background: var(--elevated); }
   .user-bubble { background: linear-gradient(160deg, #1d2740, #151a26);
                  border-color: #2c3a63; border-bottom-right-radius: 6px; }
   .assistant-bubble { border-bottom-left-radius: 6px; }

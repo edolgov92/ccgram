@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import re
+from pathlib import Path
 
 import pytest
 from ccgram_pro import usage
@@ -84,6 +86,76 @@ def test_context_window_mapping():
     assert usage._context_window("fable5") == 1_000_000
     assert usage._context_window("claude-fable-5") == 1_000_000
     assert usage._context_window("") == 200_000
+
+
+def _fake_view(transcript: str):
+    class _V:
+        transcript_path = transcript
+
+    return _V()
+
+
+def test_session_model_label_reports_real_fallback_model(tmp_path: Path, monkeypatch):
+    f = tmp_path / "t.jsonl"
+    f.write_text(
+        json.dumps(
+            {
+                "type": "assistant",
+                "message": {
+                    "model": "claude-opus-4-8",
+                    "usage": {"input_tokens": 10},
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    import ccgram.window_query as wq
+
+    monkeypatch.setattr(wq, "view_window", lambda _wid: _fake_view(str(f)))
+    monkeypatch.setattr(usage, "_sidecar_model", lambda _wid: "fable5-1m")
+    assert usage._session_model_label("@1") == "Opus 4.8 1M"
+
+
+def test_session_model_label_non_1m(tmp_path: Path, monkeypatch):
+    f = tmp_path / "t.jsonl"
+    f.write_text(
+        json.dumps(
+            {
+                "type": "assistant",
+                "message": {
+                    "model": "claude-opus-4-8",
+                    "usage": {"input_tokens": 10},
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    import ccgram.window_query as wq
+
+    monkeypatch.setattr(wq, "view_window", lambda _wid: _fake_view(str(f)))
+    monkeypatch.setattr(usage, "_sidecar_model", lambda _wid: "opus48")
+    assert usage._session_model_label("@1") == "Opus 4.8"
+
+
+def test_session_model_label_blank_without_transcript(monkeypatch):
+    import ccgram.window_query as wq
+
+    monkeypatch.setattr(wq, "view_window", lambda _wid: None)
+    assert usage._session_model_label("@1") == ""
+
+
+async def test_build_footer_prepends_real_model(monkeypatch):
+    monkeypatch.setattr(usage, "_session_model_label", lambda _wid: "Fable 5 1M")
+    monkeypatch.setattr(usage, "_context_percent", lambda _wid: 43)
+
+    async def none_fetch():
+        return None
+
+    monkeypatch.setattr(usage, "_fetch_usage", none_fetch)
+    footer = await usage.build_footer("@1")
+    assert footer == "\n\nFable 5 1M; Context: 43%"
 
 
 async def test_build_footer_combines(monkeypatch):

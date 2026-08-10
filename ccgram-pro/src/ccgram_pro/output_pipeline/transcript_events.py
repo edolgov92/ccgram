@@ -39,6 +39,11 @@ class TurnEvent:
     tool_input: dict | None = None
     tool_use_id: str = ""
     is_error: bool = False
+    # For ``assistant`` events: the model id that actually produced this turn
+    # (``message.model`` in the transcript, e.g. ``claude-opus-4-8``). This can
+    # differ from the selected/launch model when Claude Code falls back to Opus,
+    # so the viewer surfaces it per message. Empty for non-assistant events.
+    model: str = ""
 
 
 def _stringify_tool_result(content: object) -> tuple[str, bool]:
@@ -81,12 +86,18 @@ def events_from_lines(lines: list[str]) -> list[TurnEvent]:
         if not isinstance(message, dict):
             continue
         content = message.get("content")
+        # Only assistant turns carry the model that answered; user turns don't.
+        model = str(message.get("model") or "") if role == "assistant" else ""
 
         if isinstance(content, str):
             kind = _role_kind(role)
             text = _clean_text(content, kind)
             if text.strip():
-                events.append(TurnEvent(kind=kind, text=text))
+                events.append(
+                    TurnEvent(
+                        kind=kind, text=text, model=model if kind == "assistant" else ""
+                    )
+                )
             continue
 
         if not isinstance(content, list):
@@ -100,7 +111,13 @@ def events_from_lines(lines: list[str]) -> list[TurnEvent]:
                 kind = _role_kind(role)
                 text = _clean_text(block.get("text", ""), kind)
                 if text.strip():
-                    events.append(TurnEvent(kind=kind, text=text))
+                    events.append(
+                        TurnEvent(
+                            kind=kind,
+                            text=text,
+                            model=model if kind == "assistant" else "",
+                        )
+                    )
             elif btype == "thinking":
                 text = block.get("text") or block.get("thinking", "")
                 if text.strip():
@@ -179,6 +196,8 @@ def events_to_dicts(events: list[TurnEvent]) -> list[dict]:
             d["tool_use_id"] = ev.tool_use_id
         if ev.is_error:
             d["is_error"] = True
+        if ev.model:
+            d["model"] = ev.model
         out.append(d)
     return out
 
@@ -199,6 +218,7 @@ def events_from_dicts(items: list) -> list[TurnEvent]:
                 else None,
                 tool_use_id=str(d.get("tool_use_id", "")),
                 is_error=bool(d.get("is_error", False)),
+                model=str(d.get("model", "")),
             )
         )
     return events

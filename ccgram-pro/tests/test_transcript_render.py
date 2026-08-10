@@ -150,6 +150,45 @@ def test_events_dict_round_trip() -> None:
     assert restored[2].is_error is True
 
 
+def test_extract_events_captures_assistant_model(tmp_path: Path) -> None:
+    f = tmp_path / "t.jsonl"
+    _write_transcript(
+        f,
+        [
+            {"role": "user", "message": {"content": "hi"}},
+            {
+                "role": "assistant",
+                "message": {
+                    "model": "claude-opus-4-8",
+                    "content": [{"type": "text", "text": "Hello!"}],
+                },
+            },
+        ],
+    )
+    events = extract_events(str(f))
+    assert events[0].model == ""  # user turns carry no model
+    assert events[1].model == "claude-opus-4-8"
+
+
+def test_model_survives_dict_round_trip() -> None:
+    events = [TurnEvent(kind="assistant", text="ok", model="claude-fable-5")]
+    restored = events_from_dicts(events_to_dicts(events))
+    assert restored[0].model == "claude-fable-5"
+
+
+def test_render_assistant_shows_real_model_tag() -> None:
+    events = [TurnEvent(kind="assistant", text="done", model="claude-opus-4-8")]
+    html = render_events_html(events)
+    assert "model-tag" in html
+    assert "Opus 4.8" in html
+
+
+def test_render_assistant_without_model_has_no_tag() -> None:
+    events = [TurnEvent(kind="assistant", text="done")]
+    html = render_events_html(events)
+    assert "model-tag" not in html
+
+
 # ── HTML rendering ──────────────────────────────────────────────────────
 
 

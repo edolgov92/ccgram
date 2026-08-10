@@ -6,8 +6,9 @@ token, cached so we never call it per-message, and computes the session's
 context-window usage from its transcript. Every path degrades to an empty string
 on any failure so a summary is never blocked or broken by a usage lookup.
 
-Footer shape (matches the Claude app's usage view):
-    Context: 43%; 5h: 6% (res 3:19pm); Weekly: 63% (res 13 Jul 1:59pm); Fable: 100% (res 13 Jul 1:59pm)
+Footer shape (leading token is the model that actually answered — see
+``_session_model_label`` — then the Claude app's usage view):
+    Fable 5 1M; Context: 43%; 5h: 6% (res 3:19pm); Weekly: 63% (res 13 Jul 1:59pm); Fable: 100% (res 13 Jul 1:59pm)
 """
 
 from __future__ import annotations
@@ -20,8 +21,11 @@ from typing import Any
 
 import structlog
 
+from .model_names import display_name
+
 logger = structlog.get_logger()
 
+_ONE_MILLION_TOKENS = 1_000_000  # the 1M context window threshold
 _USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 _CACHE_TTL = 60.0  # seconds — usage windows move slowly; one call/min at most
 _HTTP_TIMEOUT = 6.0
@@ -141,7 +145,7 @@ def _context_window(model: str) -> int:
     200k."""
     lowered = (model or "").lower()
     if any(tag in lowered for tag in ("1m", "fable", "opus5", "opus-5")):
-        return 1_000_000
+        return _ONE_MILLION_TOKENS
     return 200_000
 
 
@@ -188,6 +192,33 @@ def _latest_turn_tokens(transcript: str) -> tuple[int, str]:
     return total, model
 
 
+def _session_model_label(window_id: str) -> str:
+    """Human label for the model that ACTUALLY answered the latest turn.
+
+    Ground truth is the transcript's last assistant ``message.model`` — not the
+    selected/launch model, which can silently differ (Claude Code falls back to
+    Opus when a scoped model like Fable is rate-limited). Appends ``1M`` when the
+    session runs the 1M context window. ``""`` on any failure so the footer is
+    never blocked.
+    """
+    # Lazy: ccgram internal — deferred to avoid a bootstrap import cycle.
+    from ccgram.window_query import view_window
+
+    try:
+        view = view_window(window_id)
+    except RuntimeError:
+        return ""
+    transcript = getattr(view, "transcript_path", None) if view else None
+    if not transcript:
+        return ""
+    _total, model = _latest_turn_tokens(transcript)
+    sidecar = _sidecar_model(window_id)
+    label = display_name(model or sidecar)
+    if label and _context_window(sidecar or model) >= _ONE_MILLION_TOKENS:
+        label += " 1M"
+    return label
+
+
 def _context_percent(window_id: str) -> int | None:
     """Percent of the context window in use by this session's latest turn."""
     # Lazy: ccgram internal — deferred to avoid a bootstrap import cycle.
@@ -214,6 +245,9 @@ async def build_footer(window_id: str) -> str:
     """
     try:
         parts: list[str] = []
+        model_label = _session_model_label(window_id)
+        if model_label:
+            parts.append(model_label)
         context = _context_percent(window_id)
         if context is not None:
             parts.append(f"Context: {context}%")
