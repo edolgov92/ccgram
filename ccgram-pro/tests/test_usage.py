@@ -50,7 +50,15 @@ def test_format_account_limits_full():
     assert "Weekly: 63%" in line
     assert "Fable: 100%" in line
     assert line.count("Fable") == 1  # session + weekly_all don't add model lines
-    assert "res " in line
+    assert "res " in line  # the 5h window keeps its (moving) reset time
+
+
+def test_weekly_and_scoped_caps_omit_reset_time():
+    line = usage.format_account_limits(_SAMPLE)
+    # Only the 5h window shows a reset; weekly + per-model weekly caps don't.
+    assert line.count("(res ") == 1
+    after_weekly = line.split("Weekly:", 1)[1]
+    assert "(res" not in after_weekly  # neither Weekly nor Fable carry a reset
 
 
 def test_format_account_limits_handles_missing_fields():

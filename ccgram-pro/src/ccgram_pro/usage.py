@@ -7,8 +7,9 @@ context-window usage from its transcript. Every path degrades to an empty string
 on any failure so a summary is never blocked or broken by a usage lookup.
 
 Footer shape (leading token is the model that actually answered — see
-``_session_model_label`` — then the Claude app's usage view):
-    Fable 5 1M; Context: 43%; 5h: 6% (res 3:19pm); Weekly: 63% (res 13 Jul 1:59pm); Fable: 100% (res 13 Jul 1:59pm)
+``_session_model_label``; only the rolling 5h window shows its reset time,
+weekly caps don't since they reset on a fixed Mon-2pm cadence):
+    Fable 5 1M; Context: 43%; 5h: 6% (res 3:19pm); Weekly: 63%; Fable: 100%
 """
 
 from __future__ import annotations
@@ -117,24 +118,20 @@ def format_account_limits(usage: dict[str, Any]) -> str:
             + (f" (res {reset})" if reset else "")
         )
 
+    # Weekly caps reset on a fixed cadence (Mon 2pm), so the reset time is
+    # redundant noise — omit it (unlike the rolling 5h window above, whose reset
+    # moves and is worth showing).
     seven_day = usage.get("seven_day") or {}
     if seven_day.get("utilization") is not None:
-        reset = _fmt_reset(seven_day.get("resets_at"), with_date=True)
-        parts.append(
-            f"Weekly: {round(seven_day['utilization'])}%"
-            + (f" (res {reset})" if reset else "")
-        )
+        parts.append(f"Weekly: {round(seven_day['utilization'])}%")
 
-    # Per-model weekly-scoped caps (e.g. Fable) surface as their own limit line.
+    # Per-model weekly-scoped caps (e.g. Fable) surface as their own limit line —
+    # same fixed weekly cadence, so likewise no reset time.
     for limit in usage.get("limits") or []:
         model = (limit.get("scope") or {}).get("model") or {}
         name = model.get("display_name")
         if limit.get("group") == "weekly" and name and limit.get("percent") is not None:
-            reset = _fmt_reset(limit.get("resets_at"), with_date=True)
-            parts.append(
-                f"{name}: {round(limit['percent'])}%"
-                + (f" (res {reset})" if reset else "")
-            )
+            parts.append(f"{name}: {round(limit['percent'])}%")
 
     return "; ".join(parts)
 
