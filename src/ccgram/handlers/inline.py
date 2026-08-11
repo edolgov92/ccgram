@@ -62,11 +62,14 @@ async def unsupported_content_handler(
     if not user or not config.is_user_allowed(user.id):
         return
     logger.debug("Unsupported content from user %d", user.id)
-    # Omit "voice" from the list when whisper is configured (has its own handler)
-    media_list = (
-        "Stickers, voice, video" if not config.whisper_provider else "Stickers, video"
+    # Audio/video/animation are handled now; voice too when whisper is configured.
+    # What still lands here: stickers, contacts, locations, polls, dice, etc.
+    supported = (
+        "text, photos, documents, audio, video, or voice"
+        if config.whisper_provider
+        else "text, photos, documents, audio, or video"
     )
     await safe_reply(
         update.message,
-        f"⚠ {media_list}, and similar media are not supported. Use text, photos, or documents.",
+        f"⚠ Stickers and similar media are not supported. Use {supported}.",
     )

@@ -1,17 +1,20 @@
-"""Photo and document message handlers for forwarding files to Claude Code.
+"""Photo, document, and media message handlers for forwarding files to Claude Code.
 
 Saves uploaded files to `.ccgram-uploads/` in the session's cwd, then sends
 Claude a natural-language message with the relative path so it can read the
-file via its Read tool.
+file via its Read tool. The agent runs on the same machine, so a local path is
+handed over directly — no external hosting or link is needed.
 
 Key handlers:
   - handle_photo_message: handles filters.PHOTO
   - handle_document_message: handles filters.Document.ALL
+  - handle_media_message: handles audio / video / animation / video_note
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+import mimetypes
 import structlog
 import re
 from datetime import datetime, timezone
@@ -277,6 +280,85 @@ async def handle_document_message(
         doc.file_id,
         doc.file_size,
         "File",
+        "I've uploaded {name} to {path}",
+        "\U0001f4ce",
+    )
+
+
+# Media kinds Telegram delivers as their own message type (not `document`):
+# (message attribute, agent-facing size label, generated-name prefix, default ext).
+# Ordered by how we probe a message — each carries a real downloadable file.
+_MEDIA_KINDS: tuple[tuple[str, str, str, str], ...] = (
+    ("audio", "Audio", "audio", ".mp3"),
+    ("video", "Video", "video", ".mp4"),
+    ("animation", "Animation", "animation", ".mp4"),
+    ("video_note", "Video note", "video_note", ".mp4"),
+)
+
+
+def _media_extension(mime_type: str | None, fallback: str) -> str:
+    """Best-effort file extension from a MIME type (e.g. audio/mpeg → .mp3)."""
+    if mime_type:
+        ext = mimetypes.guess_extension(mime_type)
+        if ext:
+            return ext
+    return fallback
+
+
+def _describe_media(message: Message) -> tuple[str, str, int | None, str] | None:
+    """Return (filename, file_id, file_size, size_label) for supported media.
+
+    Handles audio / video / animation / video_note — the media types Telegram
+    sends outside `document`/`photo`. Falls back to a generated name (with an
+    extension derived from the MIME type) when the media carries no file_name.
+    Returns None if the message holds none of these.
+    """
+    for attr, size_label, prefix, default_ext in _MEDIA_KINDS:
+        media = getattr(message, attr, None)
+        if media is None:
+            continue
+        file_name = getattr(media, "file_name", None)
+        if file_name:
+            filename = _sanitize_filename(file_name)
+        else:
+            ext = _media_extension(getattr(media, "mime_type", None), default_ext)
+            unique = getattr(media, "file_unique_id", "") or ""
+            timestamp = datetime.now(tz=timezone.utc).strftime("%Y%m%d_%H%M%S")
+            filename = _sanitize_filename(f"{prefix}_{timestamp}_{unique[:8]}{ext}")
+        return filename, media.file_id, media.file_size, size_label
+    return None
+
+
+async def handle_media_message(
+    update: Update, _context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Handle audio/video/animation/video_note: save + notify Claude with the path.
+
+    These arrive as their own Telegram message types (a music file becomes
+    `audio`, not `document`), so without this they fell through to the
+    unsupported-content reply. The agent gets the local path and decides what to
+    do with the file.
+    """
+    user = update.effective_user
+    message = update.message
+    if not user or not message:
+        return
+    if not config.is_user_allowed(user.id):
+        await safe_reply(message, "You are not authorized to use this bot.")
+        return
+
+    described = _describe_media(message)
+    if described is None:
+        return
+    filename, file_id, file_size, size_label = described
+    await _upload_and_notify(
+        message,
+        user.id,
+        get_thread_id(update),
+        filename,
+        file_id,
+        file_size,
+        size_label,
         "I've uploaded {name} to {path}",
         "\U0001f4ce",
     )

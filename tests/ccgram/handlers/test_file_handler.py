@@ -2,11 +2,14 @@
 
 import re
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from ccgram.handlers.file_handler import (
+    _describe_media,
     _generate_photo_filename,
+    _media_extension,
     _sanitize_caption,
     _sanitize_filename,
     _unique_dest,
@@ -120,3 +123,75 @@ class TestGeneratePhotoFilename:
     def test_format(self) -> None:
         result = _generate_photo_filename("ABCDEFGHIJKLMNOP")
         assert re.match(r"^photo_\d{8}_\d{6}_ABCDEFGH\.jpg$", result)
+
+
+def _media_message(**kwargs: object) -> SimpleNamespace:
+    base: dict[str, object] = {
+        "audio": None,
+        "video": None,
+        "animation": None,
+        "video_note": None,
+    }
+    base.update(kwargs)
+    return SimpleNamespace(**base)
+
+
+class TestMediaExtension:
+    def test_from_known_mime(self) -> None:
+        assert _media_extension("audio/mpeg", ".fallback") == ".mp3"
+        assert _media_extension("video/mp4", ".fallback") == ".mp4"
+
+    def test_fallback_on_none_or_unknown(self) -> None:
+        assert _media_extension(None, ".mp4") == ".mp4"
+        assert _media_extension("application/x-nope", ".mp4") == ".mp4"
+
+
+class TestDescribeMedia:
+    def test_audio_with_filename(self) -> None:
+        msg = _media_message(
+            audio=SimpleNamespace(
+                file_name="song.mp3",
+                file_id="AUD1",
+                file_unique_id="uniq1234",
+                file_size=999,
+                mime_type="audio/mpeg",
+            )
+        )
+        assert _describe_media(msg) == ("song.mp3", "AUD1", 999, "Audio")
+
+    def test_audio_without_filename_derives_name(self) -> None:
+        msg = _media_message(
+            audio=SimpleNamespace(
+                file_name=None,
+                file_id="AUD2",
+                file_unique_id="abcdefgh9999",
+                file_size=None,
+                mime_type="audio/ogg",
+            )
+        )
+        filename, file_id, file_size, label = _describe_media(msg)
+        assert (file_id, file_size, label) == ("AUD2", None, "Audio")
+        assert re.match(r"^audio_\d{8}_\d{6}_abcdefgh\.ogg$", filename)
+
+    def test_video_uses_original_name(self) -> None:
+        msg = _media_message(
+            video=SimpleNamespace(
+                file_name="clip.mov",
+                file_id="VID1",
+                file_unique_id="v",
+                file_size=42,
+                mime_type="video/quicktime",
+            )
+        )
+        assert _describe_media(msg) == ("clip.mov", "VID1", 42, "Video")
+
+    def test_video_note_without_name_or_mime(self) -> None:
+        msg = _media_message(
+            video_note=SimpleNamespace(file_id="VN1", file_unique_id="xy", file_size=10)
+        )
+        filename, file_id, _size, label = _describe_media(msg)
+        assert (file_id, label) == ("VN1", "Video note")
+        assert filename.startswith("video_note_") and filename.endswith(".mp4")
+
+    def test_returns_none_without_media(self) -> None:
+        assert _describe_media(_media_message()) is None

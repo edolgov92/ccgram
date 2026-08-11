@@ -32,7 +32,11 @@ from .commands import (
     forward_command_handler,
     toolbar_command,
 )
-from .file_handler import handle_document_message, handle_photo_message
+from .file_handler import (
+    handle_document_message,
+    handle_media_message,
+    handle_photo_message,
+)
 from .inline import inline_query_handler, unsupported_content_handler
 from .live import live_command, panes_command, screenshot_command
 from .messaging_pipeline import toolcalls_command, verbose_command
@@ -128,6 +132,15 @@ def register_all(
     application.add_handler(
         MessageHandler(filters.VOICE & group_filter, handle_voice_message)
     )
+    # Audio (music), video, GIFs, and round video notes carry a real file but
+    # arrive as their own message types (not `document`) — save + hand the agent
+    # the path, same as a document.
+    media_filter = (
+        filters.AUDIO | filters.VIDEO | filters.ANIMATION | filters.VIDEO_NOTE
+    )
+    application.add_handler(
+        MessageHandler(media_filter & group_filter, handle_media_message)
+    )
     application.add_handler(
         MessageHandler(
             ~filters.COMMAND
@@ -135,6 +148,7 @@ def register_all(
             & ~filters.PHOTO
             & ~filters.Document.ALL
             & ~filters.VOICE
+            & ~media_filter
             & ~filters.StatusUpdate.ALL
             & group_filter,
             unsupported_content_handler,

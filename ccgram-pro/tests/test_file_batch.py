@@ -70,17 +70,66 @@ async def test_passthrough_when_unbound(monkeypatch) -> None:
     assert called == []
 
 
+def _audio_update():
+    return SimpleNamespace(
+        effective_user=SimpleNamespace(id=7),
+        message=SimpleNamespace(
+            photo=None,
+            document=None,
+            audio=SimpleNamespace(
+                file_name="song.mp3",
+                file_id="a",
+                file_unique_id="u",
+                file_size=10,
+                mime_type="audio/mpeg",
+            ),
+            video=None,
+            animation=None,
+            video_note=None,
+            caption="note",
+            chat=SimpleNamespace(id=10),
+            get_bot=lambda: SimpleNamespace(),
+        ),
+    )
+
+
 async def test_batches_photo_when_batched(monkeypatch) -> None:
     _setup(monkeypatch, batched=True)
-    captured: list[tuple[str, bool]] = []
+    captured: list[tuple[str, str]] = []
 
-    async def _stub(message, user_id, thread_id, window_id, *, is_photo) -> None:  # noqa: ANN001
-        captured.append((window_id, is_photo))
+    async def _stub(message, user_id, thread_id, window_id, *, kind) -> None:  # noqa: ANN001
+        captured.append((window_id, kind))
 
     monkeypatch.setattr(file_batch, "_save_and_enqueue", _stub)
     with pytest.raises(ApplicationHandlerStop):
         await file_batch.handle_photo(_photo_update(), SimpleNamespace())
-    assert captured == [("@5", True)]
+    assert captured == [("@5", "photo")]
+
+
+async def test_batches_media_when_batched(monkeypatch) -> None:
+    _setup(monkeypatch, batched=True)
+    captured: list[tuple[str, str]] = []
+
+    async def _stub(message, user_id, thread_id, window_id, *, kind) -> None:  # noqa: ANN001
+        captured.append((window_id, kind))
+
+    monkeypatch.setattr(file_batch, "_save_and_enqueue", _stub)
+    with pytest.raises(ApplicationHandlerStop):
+        await file_batch.handle_media(_audio_update(), SimpleNamespace())
+    assert captured == [("@5", "media")]
+
+
+async def test_media_passthrough_when_not_batched(monkeypatch) -> None:
+    _setup(monkeypatch, batched=False)
+    called: list[int] = []
+
+    async def _stub(*a, **k) -> None:
+        called.append(1)
+
+    monkeypatch.setattr(file_batch, "_save_and_enqueue", _stub)
+    # Not batched → falls through to core's immediate media handler (no raise).
+    await file_batch.handle_media(_audio_update(), SimpleNamespace())
+    assert called == []
 
 
 async def test_unauthorized_passes_through(monkeypatch) -> None:
