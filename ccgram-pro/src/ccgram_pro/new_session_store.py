@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 _PICKER_TTL_SECONDS = 1800.0
 
 _DEFAULT_MODEL = "opus5"
-_DEFAULT_EFFORT = "xhigh"
+_DEFAULT_EFFORT = "max"
 
 
 @dataclass

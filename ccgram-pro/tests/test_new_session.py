@@ -146,6 +146,40 @@ async def test_apply_selection_keeps_default_for_legacy_model(monkeypatch) -> No
     assert s.model_key == "opus5"
 
 
+def test_default_effort_is_max() -> None:
+    assert _session().effort_key == "max"
+
+
+def test_resolve_effort_key_accepts_keys_and_labels() -> None:
+    assert new_session._resolve_effort_key("max") == "max"
+    assert new_session._resolve_effort_key("high") == "high"
+    assert new_session._resolve_effort_key("extra-high") == "xhigh"
+    assert new_session._resolve_effort_key("X-High") == "xhigh"
+    assert new_session._resolve_effort_key("bogus") is None
+    assert new_session._resolve_effort_key("") is None
+    assert new_session._resolve_effort_key(None) is None
+
+
+async def test_apply_selection_applies_project_default_reasoning(monkeypatch) -> None:
+    from ccgram_pro.config import layer_dir
+
+    layer_dir().mkdir(parents=True, exist_ok=True)
+    (layer_dir() / "projects.toml").write_text(
+        '[[project]]\npath = "/tmp/a"\nlabel = "A"\n'
+        '[[project]]\npath = "/tmp/b"\nlabel = "B"\ndefault_reasoning = "high"\n'
+    )
+
+    async def _noop(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(new_session, "_resolve_project_git", _noop)
+    s = _session()
+    assert s.effort_key == "max"  # fresh-session default
+    q = SimpleNamespace(answer=_noop, edit_message_text=_noop)
+    await new_session._apply_selection(q, s, "project:1")
+    assert s.effort_key == "high"  # project's default_reasoning overrides
+
+
 def test_build_keyboard_marks_selection(projects_toml) -> None:
     s = _session(project_idx=1, model_key="opus5-1m", effort_key="max", mode="plan")
     kb = new_session._build_keyboard(s)

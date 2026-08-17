@@ -89,6 +89,24 @@ _EFFORTS: list[tuple[str, str]] = [
 ]
 _EFFORT_KEYS = {key for key, _ in _EFFORTS}
 
+# projects.toml uses friendly reasoning labels; map them to picker effort keys.
+_REASONING_ALIASES = {"extra-high": "xhigh", "x-high": "xhigh"}
+
+
+def _resolve_effort_key(value: str | None) -> str | None:
+    """Map a project's ``default_reasoning`` label to a known effort key.
+
+    Accepts a picker key (``max``, ``high``) or a friendly label
+    (``extra-high`` → ``xhigh``). Returns ``None`` when empty/unrecognized so
+    the caller keeps the current selection instead of forcing a bad ``--effort``.
+    """
+    if not value:
+        return None
+    key = value.strip().lower()
+    key = _REASONING_ALIASES.get(key, key)
+    return key if key in _EFFORT_KEYS else None
+
+
 _MODES: list[tuple[str, str]] = [("coding", "Coding"), ("plan", "Plan")]
 _MODE_KEYS = {key for key, _ in _MODES}
 
@@ -103,7 +121,7 @@ _WORKSPACE_KEYS = {key for key, _ in _WORKSPACES}
 _NON_GIT_WORKSPACES = {"current", "clone"}
 
 _DEFAULT_MODEL = "opus5"
-_DEFAULT_EFFORT = "xhigh"
+_DEFAULT_EFFORT = "max"
 _BASE_PAGE_SIZE = 6
 _CB_BASE_CURRENT = "cur"
 
@@ -586,6 +604,12 @@ async def _apply_selection(
             model_key = _resolve_model_key(projects[idx].default_model)
             if model_key:
                 session.model_key = model_key
+            # Apply the project's preferred reasoning too (e.g. Opus projects
+            # default to Max). Only when it resolves — never clobbers a manual
+            # effort tap with a bad value.
+            effort_key = _resolve_effort_key(projects[idx].default_reasoning)
+            if effort_key:
+                session.effort_key = effort_key
             session.base_branch = None
             session.branch_choices = []
             session.base_page = 0
