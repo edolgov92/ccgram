@@ -288,6 +288,18 @@ class Config:
         self.autoclose_dead_minutes: int = int(
             os.getenv("AUTOCLOSE_DEAD_MINUTES", "10")
         )
+        # Hard cap on concurrent agent windows (0 = unlimited). Too many
+        # parallel Claude Code sessions on one subscription get the OAuth
+        # token revoked by Anthropic (seen at ~18-19), killing every session.
+        self.max_agent_windows: int = _parse_int_env("CCGRAM_MAX_AGENT_WINDOWS", 12)
+        # On authentication_failed, drive `claude /login` in a scratch tmux
+        # session and post the OAuth URL to the affected topic so the user can
+        # re-auth from Telegram (reply with the code). See handlers/auth_recovery.
+        self.auto_relogin: bool = os.getenv("CCGRAM_AUTO_RELOGIN", "true").lower() in (
+            "1",
+            "true",
+            "yes",
+        )
         self.pane_lifecycle_notify: bool = os.getenv(
             "CCGRAM_PANE_LIFECYCLE_NOTIFY", ""
         ).lower() in ("1", "true", "yes")

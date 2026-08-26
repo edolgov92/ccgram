@@ -86,6 +86,7 @@ Grouped into 14 feature subpackages. Each subpackage `__init__.py` re-exports th
 
 Top-level (constants, leaves, top-level commands):
 
+- `auth_recovery.py` — Telegram-driven Claude OAuth re-login: on `authentication_failed` StopFailure, drives `claude /login` in a scratch tmux session (`ccgram-login`), posts the OAuth URL to the topic, consumes the code reply via a text_handler interceptor, verifies `.credentials.json`. Pure helpers (`is_auth_failure`, `classify_login_screen`, `extract_oauth_url`, `LOGIN_CODE_RE`) unit-tested against real captured TUI screens. Debounced global single-flow. Gated by `CCGRAM_AUTO_RELOGIN`.
 - `agent_command.py` — `/agent` (alias `/provider`) command for manual provider override. Picker UI with `(manual override)` badge + `🔄 Auto`. Sets `WindowState.provider_manual_override` so `_detect_and_apply_provider` skips the window; clears stale `transcript_path` and session_map entry so SessionMonitor stops polling the wrong transcript.
 - `callback_data.py` — `CB_*` callback data constants.
 - `callback_helpers.py` — `user_owns_window`, `get_thread_id`.

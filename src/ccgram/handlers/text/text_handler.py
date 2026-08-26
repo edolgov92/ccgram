@@ -463,6 +463,27 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await handle_text_message(update, context)
 
 
+async def _consume_reply_interceptors(
+    user_data: dict | None,
+    user_id: int,
+    thread_id: int | None,
+    text: str,
+    message: Message,
+) -> bool:
+    """Run the claim-the-next-text interceptors; True when one consumed it.
+
+    1. Worktree branch-name reply (directory-browser state still active).
+    2. OAuth re-login code reply (auth recovery flow awaiting a code) — the
+       code must reach the login TUI, not a dead agent.
+    """
+    if await _handle_worktree_name_reply(user_data, thread_id, text, message):
+        return True
+    # Lazy: auth_recovery pulls messaging_pipeline on its own paths.
+    from ..auth_recovery import consume_login_code
+
+    return await consume_login_code(user_id, thread_id, text, message)
+
+
 async def handle_text_message(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
@@ -483,9 +504,12 @@ async def handle_text_message(
     if chat.type in ("group", "supergroup") and thread_id is not None:
         thread_router.set_group_chat_id(user.id, thread_id, chat.id)
 
-    # Worktree branch-name reply: the directory-browser state is still
-    # set during the worktree step, so this must precede the UI guards.
-    if await _handle_worktree_name_reply(context.user_data, thread_id, text, message):
+    # Reply interceptors (worktree branch name, OAuth re-login code): these
+    # claim the next text message outright, so they must precede the UI guards
+    # and forwarding.
+    if await _consume_reply_interceptors(
+        context.user_data, user.id, thread_id, text, message
+    ):
         return
 
     # UI guards (window picker / directory browser active)

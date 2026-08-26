@@ -197,6 +197,7 @@ class TestHandleProviderSelect:
     ) -> None:
         mock_registry.is_valid.return_value = True
         mock_tr.get_window_for_thread.return_value = None
+        mock_tmux.list_windows = AsyncMock(return_value=[])
         mock_tmux.create_window = AsyncMock()
 
         user_data = {"browse_path": "/tmp/test", PENDING_THREAD_ID: 42}
@@ -234,6 +235,7 @@ class TestHandleProviderSelect:
         self, mock_registry: MagicMock, mock_tmux: MagicMock, mock_edit: AsyncMock
     ) -> None:
         mock_registry.is_valid.return_value = True
+        mock_tmux.list_windows = AsyncMock(return_value=[])
         mock_tmux.create_window = AsyncMock()
         query = _make_query(data=f"{CB_PROV_SELECT}claude")
         update = _make_update()
@@ -275,6 +277,7 @@ class TestHandleModeSelect:
         mock_resolve_launch.return_value = (
             "codex --dangerously-bypass-approvals-and-sandbox"
         )
+        mock_tmux.list_windows = AsyncMock(return_value=[])
         mock_tmux.create_window = AsyncMock(
             return_value=(True, "Created window 'proj'", "proj", "@5")
         )
@@ -336,6 +339,7 @@ class TestHandleModeSelect:
         mock_registry.get.return_value = mock_provider
 
         mock_resolve_launch.return_value = "claude --dangerously-skip-permissions"
+        mock_tmux.list_windows = AsyncMock(return_value=[])
         mock_tmux.create_window = AsyncMock(
             return_value=(True, "Created window 'proj'", "proj", "@5")
         )
@@ -379,6 +383,7 @@ class TestHandleModeSelect:
         self, mock_registry: MagicMock, mock_tmux: MagicMock, mock_edit: AsyncMock
     ) -> None:
         mock_registry.is_valid.return_value = True
+        mock_tmux.list_windows = AsyncMock(return_value=[])
         mock_tmux.create_window = AsyncMock()
         query = _make_query(data=f"{CB_MODE_SELECT}codex:normal")
         update = _make_update()
@@ -420,6 +425,7 @@ class TestHandleModeSelect:
         mock_registry.get.return_value = mock_provider
 
         mock_resolve_launch.return_value = "claude"
+        mock_tmux.list_windows = AsyncMock(return_value=[])
         mock_tmux.create_window = AsyncMock(
             return_value=(True, "Created window 'proj'", "proj", "@1")
         )

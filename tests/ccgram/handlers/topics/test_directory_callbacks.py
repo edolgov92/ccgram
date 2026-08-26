@@ -538,3 +538,37 @@ class TestNavigationStaleGuard:
             "Stale browser (flow reset)", show_alert=True
         )
         assert context.user_data.get(BROWSE_PATH_KEY) == "/some/old/path"
+
+
+class TestSessionCapacityError:
+    def _windows(self, count: int, with_main: bool = True):
+        windows = [MagicMock(window_name=f"agent-{i}") for i in range(count)]
+        if with_main:
+            windows.append(MagicMock(window_name="__main__"))
+        return windows
+
+    def test_zero_limit_disables_guard(self) -> None:
+        from ccgram.handlers.topics.directory_callbacks import _session_capacity_error
+
+        assert _session_capacity_error(self._windows(50), 0) is None
+        assert _session_capacity_error(self._windows(50), -1) is None
+
+    def test_below_limit_allows(self) -> None:
+        from ccgram.handlers.topics.directory_callbacks import _session_capacity_error
+
+        assert _session_capacity_error(self._windows(11), 12) is None
+
+    def test_at_limit_refuses_with_counts(self) -> None:
+        from ccgram.handlers.topics.directory_callbacks import _session_capacity_error
+
+        error = _session_capacity_error(self._windows(12), 12)
+        assert error is not None
+        assert "12/12" in error
+        assert "CCGRAM_MAX_AGENT_WINDOWS" in error
+
+    def test_main_window_not_counted(self) -> None:
+        from ccgram.handlers.topics.directory_callbacks import _session_capacity_error
+
+        assert _session_capacity_error(self._windows(11, with_main=True), 12) is None
+        error = _session_capacity_error(self._windows(12, with_main=True), 12)
+        assert error is not None

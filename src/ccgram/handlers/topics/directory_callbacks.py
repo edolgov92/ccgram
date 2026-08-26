@@ -898,6 +898,28 @@ async def _abort_topic_creation(
     clear_worktree_state(context.user_data)
 
 
+def _session_capacity_error(windows: list, limit: int) -> str | None:
+    """Return a user-facing refusal when the agent-window cap is reached.
+
+    Pure over the tmux window list: every window except the bot's own
+    ``__main__`` control window counts toward the cap. ``limit <= 0`` disables
+    the guard. The cap exists because Anthropic revokes the subscription's
+    OAuth token when too many Claude Code sessions run in parallel — one
+    runaway leak then kills every session at once.
+    """
+    if limit <= 0:
+        return None
+    agent_count = sum(1 for w in windows if w.window_name != "__main__")
+    if agent_count < limit:
+        return None
+    return (
+        f"⚠️ Session limit reached ({agent_count}/{limit}).\n\n"
+        "Close unused topics first — too many parallel agent sessions get the "
+        "account temporarily locked by Anthropic. The limit is configurable "
+        "via CCGRAM_MAX_AGENT_WINDOWS."
+    )
+
+
 async def _create_window_and_bind(  # noqa: PLR0915
     query: CallbackQuery,
     user_id: int,
@@ -922,6 +944,15 @@ async def _create_window_and_bind(  # noqa: PLR0915
     pending_thread_id: int | None = (
         context.user_data.get(PENDING_THREAD_ID) if context.user_data else None
     )
+
+    # Concurrency guard: too many parallel agent sessions on one subscription
+    # get the OAuth token revoked by Anthropic, killing EVERY session at once.
+    capacity_error = _session_capacity_error(
+        await tmux_manager.list_windows(), config.max_agent_windows
+    )
+    if capacity_error:
+        await _abort_topic_creation(query, capacity_error, context)
+        return
 
     launch_command = resolve_launch_command(provider_name, approval_mode=approval_mode)
 

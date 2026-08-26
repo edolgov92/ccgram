@@ -79,6 +79,8 @@ Precedence: CLI flag > env var > `.env` (local > config dir) > default.
 - Claude config: `--claude-config-dir` / `CLAUDE_CONFIG_DIR` overrides `~/.claude` (for Claude wrappers: `ce`, `cc-mirror`, `zai`). Used by hook install, command discovery, session monitoring.
 - Directory browser: `--show-hidden-dirs` / `CCGRAM_SHOW_HIDDEN_DIRS`.
 - Pane lifecycle notifications: `CCGRAM_PANE_LIFECYCLE_NOTIFY` (default `false`). Toggle per-window via `/panes`.
+- Session cap: `CCGRAM_MAX_AGENT_WINDOWS` (default `12`, `0` = off) refuses new window creation at the limit — too many parallel Claude sessions get the account's OAuth token revoked by Anthropic (seen at ~18-19).
+- Auto re-login: `CCGRAM_AUTO_RELOGIN` (default `true`) — on `authentication_failed` StopFailure, the bot drives `claude /login` in a scratch tmux session (`ccgram-login`, NEVER a window in the bot's session — those get adopted into topics), posts the OAuth URL to the affected topic, and consumes the user's code reply (`handlers/auth_recovery.py`).
 - Topic emoji scheme: `CCGRAM_STATUS_MODE` = `system` (default; green=working, yellow=idle) or `user` (green=ready, yellow=working). Invalid falls back to `system`.
 - Tool-call visibility: `CCGRAM_HIDE_TOOL_CALLS` (default `true`) suppresses `tool_use`/`tool_result` globally. Per-window via `WindowState.tool_call_visibility` (`default`/`shown`/`hidden`) takes precedence; cycle via status-bar toggle.
 - Mini App (optional): `CCGRAM_MINIAPP_BASE_URL` (HTTPS, externally reachable — Mini App disabled until set). `CCGRAM_MINIAPP_HOST` (default `127.0.0.1`), `CCGRAM_MINIAPP_PORT` (default `8765`). Binds locally; expects external TLS + reverse proxy.

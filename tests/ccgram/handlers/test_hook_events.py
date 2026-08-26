@@ -687,6 +687,53 @@ class TestHandleStopFailure:
             await dispatch_hook_event(event, bot)
             mock_send.assert_not_called()
 
+    async def test_auth_failure_starts_login_flow(self, monkeypatch) -> None:
+        monkeypatch.setattr(
+            "ccgram.handlers.hook_events.thread_router.iter_thread_bindings",
+            lambda: iter([(100, 42, "@0")]),
+        )
+        bot = AsyncMock(spec=Bot)
+        with (
+            patch(
+                "ccgram.handlers.hook_events.thread_router.resolve_chat_id",
+                return_value=-100,
+            ),
+            patch(
+                "ccgram.handlers.messaging_pipeline.message_sender.rate_limit_send_message"
+            ),
+            patch("ccgram.handlers.auth_recovery.maybe_start_login_flow") as mock_start,
+        ):
+            event = _make_event(
+                event_type="StopFailure",
+                data={"error": "authentication_failed"},
+            )
+            await dispatch_hook_event(event, bot)
+            mock_start.assert_called_once_with(bot, 100, 42, -100)
+
+    async def test_non_auth_failure_does_not_start_login_flow(
+        self, monkeypatch
+    ) -> None:
+        monkeypatch.setattr(
+            "ccgram.handlers.hook_events.thread_router.iter_thread_bindings",
+            lambda: iter([(100, 42, "@0")]),
+        )
+        bot = AsyncMock(spec=Bot)
+        with (
+            patch(
+                "ccgram.handlers.hook_events.thread_router.resolve_chat_id",
+                return_value=-100,
+            ),
+            patch(
+                "ccgram.handlers.messaging_pipeline.message_sender.rate_limit_send_message"
+            ),
+            patch("ccgram.handlers.auth_recovery.maybe_start_login_flow") as mock_start,
+        ):
+            event = _make_event(
+                event_type="StopFailure", data={"error": "overloaded_error"}
+            )
+            await dispatch_hook_event(event, bot)
+            mock_start.assert_not_called()
+
 
 class TestHandleSessionEnd:
     def setup_method(self) -> None:

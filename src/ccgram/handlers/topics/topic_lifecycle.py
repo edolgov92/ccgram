@@ -196,50 +196,126 @@ async def prune_stale_state(live_windows: "list[TmuxWindow]") -> None:
 
 # ── Topic existence probing ───────────────────────────────────────────────
 
+# Telegram stopped erroring on ``unpinAllForumTopicMessages`` for deleted
+# topics (verified empirically 2026-08: OK for every deleted thread), which
+# made the old probe blind — deleted topics were never detected and their tmux
+# windows leaked until the account hit Anthropic's concurrent-session limit.
+#
+# The replacement probe is ``setMessageReaction(reaction=[])`` on the topic's
+# ROOT service message (its message_id == thread_id). The call ALWAYS errors,
+# and the error text is the oracle — with zero visible side effects:
+#   - live topic:    "REACTION_EMPTY" (message exists, empty list rejected)
+#   - deleted topic: "message to react not found" (root message is gone)
+#
+# A deletion is acted on only after ``_DEAD_CONFIRMATIONS_REQUIRED``
+# consecutive probe cycles agree, so a transient Telegram wobble (or an
+# admin deleting just the root service message) can't kill a live session
+# on one bad reading.
+
+_DEAD_CONFIRMATIONS_REQUIRED = 2
+
+# (user_id, thread_id) -> consecutive "deleted" probe results.
+_dead_topic_confirmations: dict[tuple[int, int], int] = {}
+
+
+def classify_probe_error(error_message: str) -> str:
+    """Classify a ``setMessageReaction`` probe error: alive / deleted / unknown.
+
+    Pure function over the Telegram error text. Legacy topic-gone markers are
+    kept as "deleted" so any path that still surfaces them behaves correctly.
+    Unknown errors (network, rate limits) must NEVER be treated as deletions.
+    """
+    lowered = error_message.lower()
+    if "reaction_empty" in lowered or "reaction empty" in lowered:
+        return "alive"
+    if (
+        "react not found" in lowered
+        or "topic_id_invalid" in lowered
+        or "thread not found" in lowered
+    ):
+        return "deleted"
+    return "unknown"
+
+
+async def _cleanup_deleted_topic(
+    client: TelegramClient, user_id: int, thread_id: int, wid: str
+) -> None:
+    """Kill the window (if ours), clear state, and unbind a deleted topic."""
+    w = await tmux_manager.find_window_by_id(wid)
+    view = window_query.view_window(wid)
+    killed = False
+    if w and view and view.origin == CCGRAM_CREATED_WINDOW_ORIGIN:
+        await tmux_manager.kill_window(w.window_id)
+        killed = True
+    terminal_poll_state.reset_probe_failures(wid)
+    await clear_topic_state(user_id, thread_id, client, window_id=wid)
+    thread_router.unbind_thread(user_id, thread_id)
+    action = "killed" if killed else "unbound"
+    logger.info(
+        "Topic deleted: %s window_id '%s' and unbound thread %d for user %d",
+        action,
+        wid,
+        thread_id,
+        user_id,
+    )
+
 
 async def probe_topic_existence(client: TelegramClient) -> None:
-    """Probe all bound topics via Telegram API; detect deleted topics."""
+    """Probe all bound topics via Telegram API; detect deleted topics.
+
+    Uses the zero-side-effect reaction probe (see module comment above). A
+    topic is cleaned up only after two consecutive cycles classify it deleted.
+    """
     for user_id, thread_id, wid in list(thread_router.iter_thread_bindings()):
         if lifecycle_strategy.should_skip_probe(wid):
             continue
+        key = (user_id, thread_id)
+        probe_error = ""
         try:
-            await client.unpin_all_forum_topic_messages(
+            await client.set_message_reaction(
                 chat_id=thread_router.resolve_chat_id(user_id, thread_id),
-                message_thread_id=thread_id,
+                message_id=thread_id,
+                reaction=[],
             )
-            terminal_poll_state.reset_probe_failures(wid)
+            # The probe normally always errors; an unexpected success still
+            # proves the root message exists — the topic is alive.
+            verdict = "alive"
         except TelegramError as e:
-            if isinstance(e, BadRequest) and (
-                "Topic_id_invalid" in e.message
-                or "thread not found" in e.message.lower()
-            ):
-                w = await tmux_manager.find_window_by_id(wid)
-                view = window_query.view_window(wid)
-                killed = False
-                if w and view and view.origin == CCGRAM_CREATED_WINDOW_ORIGIN:
-                    await tmux_manager.kill_window(w.window_id)
-                    killed = True
-                terminal_poll_state.reset_probe_failures(wid)
-                await clear_topic_state(user_id, thread_id, client, window_id=wid)
-                thread_router.unbind_thread(user_id, thread_id)
-                action = "killed" if killed else "unbound"
-                logger.info(
-                    "Topic deleted: %s window_id '%s' and unbound thread %d for user %d",
-                    action,
-                    wid,
-                    thread_id,
-                    user_id,
-                )
+            probe_error = e.message if isinstance(e, BadRequest) else str(e)
+            verdict = classify_probe_error(probe_error)
+
+        if verdict == "alive":
+            terminal_poll_state.reset_probe_failures(wid)
+            _dead_topic_confirmations.pop(key, None)
+        elif verdict == "deleted":
+            confirmations = _dead_topic_confirmations.get(key, 0) + 1
+            if confirmations >= _DEAD_CONFIRMATIONS_REQUIRED:
+                _dead_topic_confirmations.pop(key, None)
+                await _cleanup_deleted_topic(client, user_id, thread_id, wid)
             else:
-                lifecycle_strategy.record_probe_failure(wid)
-                if not lifecycle_strategy.should_skip_probe(wid):
-                    log_throttled(
-                        logger,
-                        f"topic-probe:{wid}",
-                        "Topic probe error for %s: %s",
-                        wid,
-                        e,
-                    )
+                _dead_topic_confirmations[key] = confirmations
+                logger.info(
+                    "Topic %d looks deleted (window %s) — awaiting confirmation %d/%d",
+                    thread_id,
+                    wid,
+                    confirmations,
+                    _DEAD_CONFIRMATIONS_REQUIRED,
+                )
+        else:
+            _dead_topic_confirmations.pop(key, None)
+            lifecycle_strategy.record_probe_failure(wid)
+            if not lifecycle_strategy.should_skip_probe(wid):
+                log_throttled(
+                    logger,
+                    f"topic-probe:{wid}",
+                    "Topic probe error for %s: %s",
+                    wid,
+                    probe_error,
+                )
+
+
+def _reset_probe_confirmations_for_testing() -> None:
+    _dead_topic_confirmations.clear()
 
 
 # ------------------------------------------------------------------

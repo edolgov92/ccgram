@@ -319,6 +319,21 @@ async def _handle_stop_failure(event: HookEvent, client: TelegramClient) -> None
             client, chat_id, text, message_thread_id=thread_id
         )
 
+    # Authentication failures mean the account's OAuth token is gone — every
+    # session is dead until re-login. Kick off the Telegram-driven re-login
+    # flow (debounced; single flow) in the first affected topic.
+    # Lazy: auth_recovery pulls messaging_pipeline on its own paths.
+    from .auth_recovery import is_auth_failure, maybe_start_login_flow
+
+    if is_auth_failure(error, error_details):
+        first_user_id, first_thread_id, _wid = users[0]
+        await maybe_start_login_flow(
+            client,
+            first_user_id,
+            first_thread_id,
+            thread_router.resolve_chat_id(first_user_id, first_thread_id),
+        )
+
 
 async def _handle_session_end(event: HookEvent, client: TelegramClient) -> None:
     """Handle a SessionEnd event — clean up session lifecycle."""

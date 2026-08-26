@@ -69,6 +69,8 @@ New topic flow: first message in unbound topic → directory browser → select 
 
 Topic lifecycle: closing/deleting a topic auto-kills the tmux window and unbinds the thread. Stale bindings (window deleted externally) cleaned up by the status polling loop.
 
+Deleted-topic detection (the Bot API has NO topic-deleted update): `probe_topic_existence` calls `setMessageReaction(reaction=[])` on the topic's root service message (`message_id == thread_id`). The call always errors with zero side effects; the error text is the oracle — `REACTION_EMPTY` = alive, `message to react not found` = deleted. Cleanup fires only after 2 consecutive "deleted" cycles. The previous probe (`unpinAllForumTopicMessages`) went blind in 2026-08 — Telegram stopped erroring on deleted topics — which leaked windows until Anthropic revoked the account token; `CCGRAM_MAX_AGENT_WINDOWS` is the belt-and-braces cap against any future detection breakage.
+
 ## Session Lifecycle
 
 Startup cleanup: all tracked sessions not present in `session_map.json` are cleaned up.

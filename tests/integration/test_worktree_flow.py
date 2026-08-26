@@ -140,6 +140,7 @@ async def test_new_worktree_creates_and_persists_to_window_state(
             "ccgram.handlers.topics.directory_callbacks._try_install_messaging_skill"
         ),
     ):
+        mock_tmux.list_windows = AsyncMock(return_value=[])
         mock_tmux.create_window = AsyncMock(
             return_value=(True, "Created window 'repo'", "repo", "@7")
         )
@@ -183,6 +184,7 @@ async def test_create_window_failure_clears_worktree_state(
         ),
         patch("ccgram.handlers.topics.directory_callbacks.tmux_manager") as mock_tmux,
     ):
+        mock_tmux.list_windows = AsyncMock(return_value=[])
         mock_tmux.create_window = AsyncMock(
             return_value=(False, "tmux refused", None, None)
         )

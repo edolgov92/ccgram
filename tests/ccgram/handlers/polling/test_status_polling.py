@@ -9,6 +9,7 @@ from telegram.error import BadRequest, TelegramError
 from _helpers import make_mock_provider
 
 from ccgram.handlers.topics.topic_lifecycle import (
+    _reset_probe_confirmations_for_testing,
     check_autoclose_timers,
     probe_topic_existence,
     prune_stale_state,
@@ -76,10 +77,12 @@ def _reset():
     _window_poll_state.clear()
     _topic_poll_state.clear()
     _dead_notified.clear()
+    _reset_probe_confirmations_for_testing()
     yield
     _window_poll_state.clear()
     _topic_poll_state.clear()
     _dead_notified.clear()
+    _reset_probe_confirmations_for_testing()
 
 
 class TestIsShellPrompt:
@@ -671,11 +674,12 @@ class TestProbeFailures:
         with patch("ccgram.handlers.topics.topic_lifecycle.thread_router") as mock_tr:
             mock_tr.iter_thread_bindings.return_value = [(1, 42, "@5")]
             await probe_topic_existence(bot)
-        bot.unpin_all_forum_topic_messages.assert_not_called()
+        bot.set_message_reaction.assert_not_called()
 
-    async def test_probe_success_resets_counter(self) -> None:
+    async def test_probe_alive_resets_counter(self) -> None:
         terminal_poll_state.get_state("@5").probe_failures = 2
         bot = AsyncMock(spec=Bot)
+        bot.set_message_reaction.side_effect = BadRequest("REACTION_EMPTY")
         with patch("ccgram.handlers.topics.topic_lifecycle.thread_router") as mock_tr:
             mock_tr.iter_thread_bindings.return_value = [(1, 42, "@5")]
             mock_tr.resolve_chat_id.return_value = -100
@@ -684,8 +688,8 @@ class TestProbeFailures:
             _window_poll_state.get("@5") is None
             or _window_poll_state["@5"].probe_failures == 0
         )
-        bot.unpin_all_forum_topic_messages.assert_called_once_with(
-            chat_id=-100, message_thread_id=42
+        bot.set_message_reaction.assert_called_once_with(
+            chat_id=-100, message_id=42, reaction=[]
         )
 
     @pytest.mark.parametrize(
@@ -697,7 +701,7 @@ class TestProbeFailures:
     )
     async def test_probe_error_increments_counter(self, exc: TelegramError) -> None:
         bot = AsyncMock(spec=Bot)
-        bot.unpin_all_forum_topic_messages.side_effect = exc
+        bot.set_message_reaction.side_effect = exc
         with patch("ccgram.handlers.topics.topic_lifecycle.thread_router") as mock_tr:
             mock_tr.iter_thread_bindings.return_value = [(1, 42, "@5")]
             mock_tr.resolve_chat_id.return_value = -100
@@ -706,13 +710,13 @@ class TestProbeFailures:
 
     async def test_probe_suspends_after_max_failures(self) -> None:
         bot = AsyncMock(spec=Bot)
-        bot.unpin_all_forum_topic_messages.side_effect = TelegramError("Timed out")
+        bot.set_message_reaction.side_effect = TelegramError("Timed out")
         with patch("ccgram.handlers.topics.topic_lifecycle.thread_router") as mock_tr:
             mock_tr.iter_thread_bindings.return_value = [(1, 42, "@5")]
             mock_tr.resolve_chat_id.return_value = -100
             for _ in range(MAX_PROBE_FAILURES + 1):
                 await probe_topic_existence(bot)
-        assert bot.unpin_all_forum_topic_messages.call_count == MAX_PROBE_FAILURES
+        assert bot.set_message_reaction.call_count == MAX_PROBE_FAILURES
         assert _window_poll_state["@5"].probe_failures == MAX_PROBE_FAILURES
 
     @pytest.mark.parametrize(
@@ -725,7 +729,7 @@ class TestProbeFailures:
     async def test_topic_deleted_cleans_up(self, window_alive: bool) -> None:
         terminal_poll_state.get_state("@5").probe_failures = 1
         bot = AsyncMock(spec=Bot)
-        bot.unpin_all_forum_topic_messages.side_effect = BadRequest("Topic_id_invalid")
+        bot.set_message_reaction.side_effect = BadRequest("message to react not found")
         mock_window = MagicMock()
         mock_window.window_id = "@5"
         with (
@@ -742,6 +746,8 @@ class TestProbeFailures:
                 return_value=mock_window if window_alive else None
             )
             mock_tm.kill_window = AsyncMock()
+            await probe_topic_existence(bot)
+            mock_cleanup.assert_not_called()
             await probe_topic_existence(bot)
         mock_tm.kill_window.assert_not_called()
         mock_cleanup.assert_called_once_with(1, 42, bot, window_id="@5")
@@ -2156,14 +2162,14 @@ class TestDeadWindowNotification:
     @pytest.mark.parametrize(
         "error_msg",
         [
-            pytest.param("Message thread not found", id="capitalized"),
-            pytest.param("message thread not found", id="lowercase"),
-            pytest.param("Bad Request: Thread not found", id="thread-variant"),
+            pytest.param("message to react not found", id="reaction-probe"),
+            pytest.param("Message thread not found", id="legacy-capitalized"),
+            pytest.param("Bad Request: Thread not found", id="legacy-thread-variant"),
         ],
     )
-    async def test_probe_cleans_up_on_thread_not_found(self, error_msg: str) -> None:
+    async def test_probe_cleans_up_on_deleted_markers(self, error_msg: str) -> None:
         bot = AsyncMock(spec=Bot)
-        bot.unpin_all_forum_topic_messages.side_effect = BadRequest(error_msg)
+        bot.set_message_reaction.side_effect = BadRequest(error_msg)
         mock_window = MagicMock()
         mock_window.window_id = "@5"
         with (
@@ -2178,6 +2184,7 @@ class TestDeadWindowNotification:
             mock_tr.resolve_chat_id.return_value = -100
             mock_tm.find_window_by_id = AsyncMock(return_value=mock_window)
             mock_tm.kill_window = AsyncMock()
+            await probe_topic_existence(bot)
             await probe_topic_existence(bot)
 
         mock_tm.kill_window.assert_not_called()
