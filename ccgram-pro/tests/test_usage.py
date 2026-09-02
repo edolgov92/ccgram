@@ -93,6 +93,9 @@ def test_context_window_mapping():
     assert usage._context_window("opus5-1m") == 1_000_000
     assert usage._context_window("fable5") == 1_000_000
     assert usage._context_window("claude-fable-5") == 1_000_000
+    assert usage._context_window("fable51") == 1_000_000
+    assert usage._context_window("claude-fable-5-1") == 1_000_000
+    assert usage._context_window("claude-fable-5-1[1m]") == 1_000_000
     assert usage._context_window("") == 200_000
 
 
