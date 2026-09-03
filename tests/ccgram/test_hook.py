@@ -956,3 +956,90 @@ class TestProviderFromPaneTty:
 
     def test_unknown_process_returns_none(self) -> None:
         assert self._run("/usr/bin/python3 script.py\n") is None
+
+
+class TestNestedInvocationGuard:
+    @staticmethod
+    def _reader(tree):
+        return lambda pid: tree.get(pid)
+
+    def test_interactive_has_one_claude_ancestor(self) -> None:
+        from ccgram.hook import _count_claude_ancestors
+
+        tree = {100: (90, "python3"), 90: (80, "claude"), 80: (1, "bash")}
+        assert _count_claude_ancestors(100, self._reader(tree)) == 1
+
+    def test_nested_has_two_claude_ancestors(self) -> None:
+        from ccgram.hook import _count_claude_ancestors
+
+        tree = {
+            100: (90, "python3"),
+            90: (80, "claude"),
+            80: (70, "node"),
+            70: (1, "claude"),
+        }
+        assert _count_claude_ancestors(100, self._reader(tree)) == 2
+
+    def test_shell_wrapper_hop_is_skipped(self) -> None:
+        from ccgram.hook import _count_claude_ancestors
+
+        # claude runs the hook via `sh -c` — the sh hop must not break counting.
+        tree = {
+            100: (95, "python3"),
+            95: (90, "sh"),
+            90: (80, "claude"),
+            80: (1, "bash"),
+        }
+        assert _count_claude_ancestors(100, self._reader(tree)) == 1
+
+    def test_broken_chain_fails_open_as_zero(self) -> None:
+        from ccgram.hook import _count_claude_ancestors
+
+        assert _count_claude_ancestors(100, lambda _pid: None) == 0
+
+    def test_walk_terminates_on_cycle(self) -> None:
+        from ccgram.hook import _count_claude_ancestors
+
+        tree = {100: (90, "claude"), 90: (100, "node")}
+        assert _count_claude_ancestors(100, self._reader(tree)) == 1
+
+    def test_hook_ignored_env(self, monkeypatch) -> None:
+        from ccgram.hook import _hook_ignored
+
+        monkeypatch.delenv("CCGRAM_HOOK_IGNORE", raising=False)
+        assert _hook_ignored() is False
+        monkeypatch.setenv("CCGRAM_HOOK_IGNORE", "1")
+        assert _hook_ignored() is True
+        monkeypatch.setenv("CCGRAM_HOOK_IGNORE", "true")
+        assert _hook_ignored() is True
+        monkeypatch.setenv("CCGRAM_HOOK_IGNORE", "0")
+        assert _hook_ignored() is False
+
+    def test_process_stdin_skips_when_ignored(self, monkeypatch) -> None:
+        import io
+
+        from ccgram import hook as hook_mod
+
+        monkeypatch.setenv("CCGRAM_HOOK_IGNORE", "1")
+        monkeypatch.setattr(sys, "stdin", io.StringIO('{"session_id": "x"}'))
+        called = []
+        monkeypatch.setattr(
+            hook_mod, "_locate_primary_window", lambda *a, **k: called.append(1)
+        )
+        hook_mod._process_hook_stdin()
+        assert called == []
+
+    def test_process_stdin_skips_when_nested(self, monkeypatch) -> None:
+        import io
+
+        from ccgram import hook as hook_mod
+
+        monkeypatch.delenv("CCGRAM_HOOK_IGNORE", raising=False)
+        monkeypatch.setattr(hook_mod, "_is_nested_agent_invocation", lambda: True)
+        monkeypatch.setattr(sys, "stdin", io.StringIO('{"session_id": "x"}'))
+        called = []
+        monkeypatch.setattr(
+            hook_mod, "_locate_primary_window", lambda *a, **k: called.append(1)
+        )
+        hook_mod._process_hook_stdin()
+        assert called == []

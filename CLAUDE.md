@@ -32,7 +32,7 @@ Bot commands in topics: `/send`, `/toolbar`, `/history`, `/sessions`, `/restore`
 - Topic-only. No `active_sessions`, no `/list`, no General topic routing, no backward-compat for non-topic mode.
 - No truncation at parse layer. Splitting only at send layer (`split_message`, 4096 char limit).
 - Entity-based formatting. Use `safe_reply`/`safe_edit`/`safe_send` — convert markdown to plain text + `MessageEntity` offsets via `telegramify-markdown`, auto-fallback to plain. Internal queue/UI code calls bot API directly with its own fallback.
-- Hook-based session tracking. Claude Code hooks write `session_map.json` and `events.jsonl`; monitor polls both. Missing hooks logged at startup with fix command; terminal scraping is fallback.
+- Hook-based session tracking. Claude Code hooks write `session_map.json` and `events.jsonl`; monitor polls both. Missing hooks logged at startup with fix command; terminal scraping is fallback. Nested-invocation guard (`hook.py`): agents legitimately spawn one-shot `claude -p` runs (report pipelines) that inherit the window env + global hooks; the hook counts `claude` ancestors in its `/proc` chain (≥2 = nested) and drops those events so a nested run never hijacks `session_map` or dumps its raw output into the topic. Explicit opt-out: `CCGRAM_HOOK_IGNORE=1` on the spawned process.
 - Per-user FIFO message queue, merging up to 3800 chars, tool_use/tool_result pairing.
 - Rate limit: 0.5s min between messages per user via `rate_limit_send()`. PTB `AIORateLimiter` adds flood protection.
 

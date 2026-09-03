@@ -1098,9 +1098,104 @@ def _locate_primary_window(
     return session_window_key, window_id, window_name
 
 
+# ── Nested-invocation guard ───────────────────────────────────────────────
+#
+# Agents legitimately spawn one-shot `claude -p` runs (report pipelines,
+# scripts). Those children inherit the window's env + global hooks, so
+# without a guard every nested run registers itself as "the window's
+# session": session_map gets hijacked, and each nested Stop dumps that
+# run's raw output into the topic (seen live: 174 nested sessions
+# attributed to one window during a heartbeat test run).
+#
+# Identity check, not heuristics: the hook walks its own /proc ancestor
+# chain. An interactive agent's hook sees exactly ONE `claude` ancestor;
+# a nested run's hook sees two or more (the nested claude plus the
+# interactive one above it). Fail-open — any walk error means "not
+# nested" so hooks keep working on exotic setups.
+
+_ANCESTOR_WALK_LIMIT = 50
+# Two claude processes in the ancestor chain (nested claude + the interactive
+# claude above it) means this hook fired from a spawned, non-primary run.
+_NESTED_CLAUDE_THRESHOLD = 2
+# /proc/<pid>/stat after the "(comm)" field: state, ppid, … — need ≥2 tokens.
+_STAT_MIN_FIELDS_AFTER_COMM = 2
+
+
+def _read_parent_and_comm(pid: int) -> tuple[int, str] | None:
+    """Return (ppid, comm) for a PID from /proc, or None when unreadable."""
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+    except OSError, ValueError:
+        return None
+    # Format: "pid (comm) state ppid ..." — comm may contain spaces/parens,
+    # so split on the LAST closing paren.
+    closing = stat.rfind(")")
+    opening = stat.find("(")
+    if closing < 0 or opening < 0:
+        return None
+    comm = stat[opening + 1 : closing]
+    fields = stat[closing + 2 :].split()
+    if len(fields) < _STAT_MIN_FIELDS_AFTER_COMM:
+        return None
+    try:
+        return int(fields[1]), comm
+    except ValueError:
+        return None
+
+
+def _count_claude_ancestors(
+    start_pid: int,
+    read_parent_and_comm: Callable[
+        [int], tuple[int, str] | None
+    ] = _read_parent_and_comm,
+) -> int:
+    """Count `claude` processes in the ancestor chain of ``start_pid``."""
+    count = 0
+    pid = start_pid
+    visited: set[int] = set()
+    for _ in range(_ANCESTOR_WALK_LIMIT):
+        if pid <= 1 or pid in visited:
+            break
+        visited.add(pid)
+        info = read_parent_and_comm(pid)
+        if info is None:
+            break
+        ppid, comm = info
+        if comm.startswith("claude"):
+            count += 1
+        pid = ppid
+    return count
+
+
+def _is_nested_agent_invocation() -> bool:
+    """True when this hook was fired by a claude nested inside another claude."""
+    try:
+        return _count_claude_ancestors(os.getpid()) >= _NESTED_CLAUDE_THRESHOLD
+    except OSError, ValueError:
+        return False
+
+
+def _hook_ignored() -> bool:
+    """Explicit opt-out: pipelines set CCGRAM_HOOK_IGNORE=1 on spawned agents."""
+    return os.environ.get("CCGRAM_HOOK_IGNORE", "").lower() in ("1", "true", "yes")
+
+
+def _should_drop_hook() -> bool:
+    """Drop hooks from opted-out or nested (spawned) agent invocations."""
+    if _hook_ignored():
+        logger.debug("CCGRAM_HOOK_IGNORE set; skipping hook event")
+        return True
+    if _is_nested_agent_invocation():
+        logger.debug("Nested agent invocation; skipping hook event")
+        return True
+    return False
+
+
 def _process_hook_stdin(provider_name: str | None = None) -> None:
     """Process an agent hook event from stdin."""
     logger.debug("Processing hook event from stdin")
+    if _should_drop_hook():
+        return
     try:
         raw_payload = json.load(sys.stdin)
     except (json.JSONDecodeError, ValueError) as e:
