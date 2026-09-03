@@ -51,9 +51,13 @@ logger = structlog.get_logger()
 _CB_PREFIX = "ccgrampro:new:"
 
 # (key, label, claude --model string)
+# Fable 5 is kept alongside 5.1 while 5.1 capacity is still shaky (overload
+# errors seen 2026-09-03) — drop it once 5.1 stabilizes.
 _MODELS: list[tuple[str, str, str]] = [
     ("opus5", "Opus 5", "claude-opus-5"),
     ("opus5-1m", "Opus 5 · 1M", "claude-opus-5[1m]"),
+    ("fable5", "Fable 5", "claude-fable-5"),
+    ("fable5-1m", "Fable 5 · 1M", "claude-fable-5[1m]"),
     ("fable51", "Fable 5.1", "claude-fable-5-1"),
     ("fable51-1m", "Fable 5.1 · 1M", "claude-fable-5-1[1m]"),
 ]
@@ -297,9 +301,13 @@ def _build_keyboard(session: store.PendingSession) -> Any:
     for i in range(0, len(project_buttons), 2):
         rows.append(project_buttons[i : i + 2])
 
-    rows.append(
-        _radio_row([(k, label) for k, label, _m in _MODELS], session.model_key, "model")
+    # Model families pair up (base | 1M) — two per row stays readable now
+    # that the picker carries three families.
+    model_buttons = _radio_row(
+        [(k, label) for k, label, _m in _MODELS], session.model_key, "model"
     )
+    for i in range(0, len(model_buttons), 2):
+        rows.append(model_buttons[i : i + 2])
     rows.append(_radio_row(_EFFORTS, session.effort_key, "effort"))
     rows.append(_radio_row(_MODES, session.mode, "mode"))
 
