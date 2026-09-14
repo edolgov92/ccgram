@@ -97,7 +97,11 @@ def _detect(monkeypatch, repo: str | None) -> None:
     async def _d(_wid: str) -> str | None:
         return repo
 
+    async def _ds(_wid: str) -> list[tuple[str, str]]:
+        return [("/tmp/repo", repo)] if repo else []
+
     monkeypatch.setattr(scn, "_detect_pr_repo", _d)
+    monkeypatch.setattr(scn, "_detect_pr_repos", _ds)
 
 
 def _git_repo(monkeypatch, value: bool) -> None:
@@ -464,6 +468,7 @@ async def test_ask_pr_number_arms_flag(monkeypatch) -> None:
         "thread_id": 2,
         "window_id": "@5",
         "repo": "backend",
+        "targets": [["/tmp/repo", "backend"]],
         "prompt_msg_id": 500,
         "user_id": 7,
     }
@@ -774,3 +779,197 @@ def test_manual_testing_prompt_content() -> None:
     assert "hp-db" in p and "только для чтения" in p
     assert "Artifact" in p and "TL;DR" in p
     assert "labels" in p
+
+
+# ── full-stack (composite) sessions ──────────────────────────────────────────
+
+
+def _composite_sidecar(window_id: str = "@5") -> None:
+    from ccgram_pro import state
+    from ccgram_pro.config import ensure_layer_dirs
+
+    ensure_layer_dirs()
+    sidecar = state.WindowSidecar(window_id=window_id, window_creation_epoch=1.0)
+    sidecar.project_repos = ["/srv/hp/backend", "/srv/hp/app"]
+    state.save(sidecar)
+
+
+def _stub_run_git(monkeypatch, remotes: dict[str, str | None], git: set[str]) -> None:
+    async def _fake(repo_path, *args):  # noqa: ANN001
+        if args == ("rev-parse", "--is-inside-work-tree"):
+            return "true" if repo_path in git else None
+        if args == ("remote", "get-url", "origin"):
+            return remotes.get(repo_path)
+        return None
+
+    monkeypatch.setattr(scn, "_run_git", _fake)
+
+
+def test_session_repo_paths_prefers_sidecar_composite(monkeypatch) -> None:
+    _composite_sidecar()
+    assert scn._session_repo_paths("@5") == ["/srv/hp/backend", "/srv/hp/app"]
+    assert scn._is_composite("@5") is True
+
+
+def test_session_repo_paths_falls_back_to_resolved_cwd(monkeypatch) -> None:
+    monkeypatch.setattr(scn.state, "resolve_repo", lambda wid: "/srv/single")
+    assert scn._session_repo_paths("@7") == ["/srv/single"]
+    assert scn._is_composite("@7") is False
+
+
+async def test_is_git_repo_requires_every_composite_repo(monkeypatch) -> None:
+    _composite_sidecar()
+    _stub_run_git(monkeypatch, {}, {"/srv/hp/backend", "/srv/hp/app"})
+    assert await scn._is_git_repo("@5") is True
+    _stub_run_git(monkeypatch, {}, {"/srv/hp/backend"})
+    assert await scn._is_git_repo("@5") is False
+
+
+async def test_detect_pr_repos_composite_returns_both(monkeypatch) -> None:
+    _composite_sidecar()
+    _stub_run_git(
+        monkeypatch,
+        {
+            "/srv/hp/backend": "git@github-humanprogram:humanprogram/primer_server.git",
+            "/srv/hp/app": "git@github-humanprogram:humanprogram/hyper_school_dashboard.git",
+        },
+        set(),
+    )
+    assert await scn._detect_pr_repos("@5") == [
+        ("/srv/hp/backend", "backend"),
+        ("/srv/hp/app", "frontend"),
+    ]
+    assert await scn._detect_pr_repo("@5") == "backend"
+
+
+def test_scope_preamble_empty_for_single_repo(monkeypatch) -> None:
+    monkeypatch.setattr(scn.state, "resolve_repo", lambda wid: "/srv/single")
+    assert scn._scope_preamble("@7", ru=True) == ""
+    assert scn._scope_preamble("@7", ru=False) == ""
+
+
+def test_scope_preamble_lists_repos_in_both_languages() -> None:
+    _composite_sidecar()
+    ru = scn._scope_preamble("@5", ru=True)
+    en = scn._scope_preamble("@5", ru=False)
+    for text in (ru, en):
+        assert "/srv/hp/backend" in text and "/srv/hp/app" in text
+        assert "git -C" in text
+    assert "full-stack" in ru and "КАЖДОГО" in ru
+    assert "EACH" in en
+
+
+async def test_self_review_composite_gets_scope_preamble(monkeypatch) -> None:
+    _own(monkeypatch)
+    _composite_sidecar()
+    forwarded = _stub_forward(monkeypatch)
+    _stub_bubble(monkeypatch)
+    msg = _Msg()
+    update = _callback_update("ccgrampro:scn:sr:@5", msg)
+    with pytest.raises(ApplicationHandlerStop):
+        await scn.handle_scenarios_callback(update, SimpleNamespace(bot=_Bot()))
+    prompt = forwarded[0][3]
+    assert prompt.startswith("Это full-stack сессия")
+    assert prompt.endswith(scn._SELF_REVIEW_PROMPT)
+
+
+@pytest.mark.parametrize(
+    ("text", "expected", "result"),
+    [
+        ("1234", 1, ["1234"]),
+        ("#1234", 1, ["1234"]),
+        ("abc", 1, None),
+        ("12 34", 1, None),
+        ("1234 567", 2, ["1234", "567"]),
+        ("1234 -", 2, ["1234", None]),
+        ("- 567", 2, [None, "567"]),
+        ("- -", 2, None),
+        ("1234", 2, None),
+        ("1234 x", 2, None),
+    ],
+)
+def test_parse_pr_reply(text: str, expected: int, result) -> None:
+    assert scn._parse_pr_reply(text, expected) == result
+
+
+def test_pr_fixer_prompt_multi_lists_targets_and_keeps_rules() -> None:
+    p = scn._pr_fixer_prompt_multi(
+        [("/srv/hp/backend", "backend", "1234"), ("/srv/hp/app", "frontend", "567")]
+    )
+    assert "__PR__" not in p and "__REPO__" not in p
+    assert "backend: /srv/hp/backend — REPO=backend, PR #1234" in p
+    assert "frontend: /srv/hp/app — REPO=frontend, PR #567" in p
+    assert "/root/projects/humanprogram/backend/var/pr-check.sh" in p
+    assert "не более 20 итераций" in p
+    assert "afplay" not in p
+
+
+def test_full_flow_prompt_multi_content() -> None:
+    p = scn._full_flow_prompt_multi(
+        [("/srv/hp/backend", "backend"), ("/srv/hp/app", "frontend")]
+    )
+    assert "__PR__" not in p and "__REPO__" not in p
+    assert "STEP 1" in p and "STEP 2" in p and "STEP 3" in p
+    assert "КАЖДОМ репозитории" in p
+    assert "backend → `develop`" in p and "frontend → `main`" in p
+    assert "gh pr create" in p
+    assert "REPO=backend" in p and "REPO=frontend" in p
+    assert "<PR>" in p
+
+
+async def test_ask_pr_number_composite_asks_for_two_numbers(monkeypatch) -> None:
+    _own(monkeypatch)
+    _composite_sidecar()
+    _stub_run_git(
+        monkeypatch,
+        {
+            "/srv/hp/backend": "git@github-humanprogram:humanprogram/primer_server.git",
+            "/srv/hp/app": "git@github-humanprogram:humanprogram/hyper_school_dashboard.git",
+        },
+        set(),
+    )
+    msg = _Msg()
+    update = _callback_update("ccgrampro:scn:pr:@5", msg)
+    user_data: dict[str, Any] = {}
+    with pytest.raises(ApplicationHandlerStop):
+        await scn.handle_scenarios_callback(
+            update, SimpleNamespace(bot=_Bot(), user_data=user_data)
+        )
+    pend = user_data[scn.AWAITING_PR_NUMBER]
+    assert [tuple(t) for t in pend["targets"]] == [
+        ("/srv/hp/backend", "backend"),
+        ("/srv/hp/app", "frontend"),
+    ]
+    assert "full-stack" in msg.edits[0]["text"]
+    assert "backend frontend" in msg.edits[0]["text"]
+
+
+async def test_consume_composite_numbers_runs_multi_fixer(monkeypatch) -> None:
+    forwarded = _stub_forward(monkeypatch)
+    _stub_bubble(monkeypatch)
+    import ccgram.handlers.callback_helpers as ch
+
+    monkeypatch.setattr(ch, "get_thread_id", lambda update: 2)
+    pend = {
+        "chat_id": 10,
+        "thread_id": 2,
+        "window_id": "@5",
+        "repo": "backend",
+        "targets": [["/srv/hp/backend", "backend"], ["/srv/hp/app", "frontend"]],
+        "prompt_msg_id": 500,
+        "user_id": 7,
+    }
+    user_data: dict[str, Any] = {scn.AWAITING_PR_NUMBER: pend}
+    bot = _Bot()
+    msg = _Msg(text="1234 -")
+    update = SimpleNamespace(message=msg, effective_user=SimpleNamespace(id=7))
+    with pytest.raises(ApplicationHandlerStop):
+        await scn.consume_pr_number_reply(
+            update, SimpleNamespace(bot=bot, user_data=user_data)
+        )
+    assert scn.AWAITING_PR_NUMBER not in user_data
+    prompt = forwarded[0][3]
+    assert "backend: /srv/hp/backend — REPO=backend, PR #1234" in prompt
+    assert "frontend" not in prompt.split("Прогони цикл ниже")[0]
+    assert "#1234 (backend)" in bot.edits[0]["text"]
+    assert msg.deleted is True

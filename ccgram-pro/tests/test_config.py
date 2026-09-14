@@ -210,3 +210,28 @@ def test_new_defaults_parse_from_toml(tmp_path: Path) -> None:
     assert settings.defaults.reactions_enabled is True
     assert settings.defaults.progress_bubble is False
     assert settings.defaults.delete_transcript_on_teardown is True
+
+
+def test_load_projects_reads_composite_repos(tmp_path: Path) -> None:
+    f = tmp_path / "projects.toml"
+    f.write_text(
+        """
+[[project]]
+path = "/srv/hp"
+label = "HP Full Stack"
+repos = ["backend", "app"]
+
+[[project]]
+path = "/srv/single"
+label = "Single"
+repos = "not-a-list"
+"""
+    )
+    projects = load_projects(f)
+    full, single = projects
+    assert full.repos == ("backend", "app")
+    assert full.is_composite is True
+    assert full.repo_paths == [Path("/srv/hp/backend"), Path("/srv/hp/app")]
+    assert single.repos == ()
+    assert single.is_composite is False
+    assert single.repo_paths == [Path("/srv/single")]

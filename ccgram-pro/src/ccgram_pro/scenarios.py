@@ -38,6 +38,12 @@ The PR-fixer (and the all-in-one flow) is gated on the session's git ``origin`` 
 known humanprogram repository, so the ``REPO`` env (``backend`` →
 ``primer_server``, ``frontend`` → ``hyper_school_dashboard``) is unambiguous and
 the user only has to supply the number.
+
+**Full-stack sessions** (composite projects, ``WindowSidecar.project_repos``)
+span several repos: eligibility checks run over every repo, git/review/testing
+prompts get a lead-in naming them all, the PR-fixer asks for one PR number per
+repo (``1234 567``, ``-`` for none) and the all-in-one flow opens a PR in each
+repo with changes and drives them all to green.
 """
 
 from __future__ import annotations
@@ -313,6 +319,67 @@ def _full_flow_prompt(repo: str) -> str:
     return _FULL_FLOW_PREAMBLE + fixer
 
 
+def _targets_listing(targets: list[tuple[str, str, str]]) -> str:
+    """``- <role>: <path> — REPO=<env>, PR #<n>`` per repo (``<n>`` may be ``<PR>``)."""
+    return "\n".join(
+        f"- {_REPO_ROLE.get(repo, repo)}: {path} — REPO={repo}, PR #{pr}"
+        for path, repo, pr in targets
+    )
+
+
+def _pr_fixer_prompt_multi(targets: list[tuple[str, str, str]]) -> str:
+    """PR auto-fixer across several repos: ``targets`` = [(path, REPO env, pr)]."""
+    generic = _PR_FIXER_TEMPLATE.replace("__REPO__", "<REPO репозитория>").replace(
+        "__PR__", "<PR репозитория>"
+    )
+    return (
+        "Это full-stack сессия: нужно довести до merge PR в НЕСКОЛЬКИХ "
+        "репозиториях одновременно:\n"
+        f"{_targets_listing(targets)}\n\n"
+        "Прогони цикл ниже для КАЖДОГО из них: команды скрипта выполняй из "
+        "корня соответствующего репозитория, подставляя его значения REPO и "
+        "номера PR вместо плейсхолдеров. Все перечисленные PR должны стать "
+        "зелёными; в заголовках прогресса указывай, о каком репозитории речь.\n\n"
+        + generic
+    )
+
+
+def _full_flow_prompt_multi(repos: list[tuple[str, str]]) -> str:
+    """Full flow across several repos: ``repos`` = [(path, REPO env)]."""
+    targets = [(path, repo, "<PR>") for path, repo in repos]
+    listing = "\n".join(
+        f"- {_REPO_ROLE.get(repo, repo)}: {path} (REPO={repo})" for path, repo in repos
+    )
+    generic = _PR_FIXER_TEMPLATE.replace("__REPO__", "<REPO репозитория>").replace(
+        "__PR__", "<PR>"
+    )
+    return (
+        "Это full-stack сессия: изменения могут быть в НЕСКОЛЬКИХ репозиториях:\n"
+        f"{listing}\n\n"
+        + _FULL_FLOW_PREAMBLE.replace(
+            "STEP 1 — Feature-ветка, commit и push:",
+            "STEP 1 — Feature-ветка, commit и push (в КАЖДОМ репозитории, где есть "
+            "изменения; ветки называй одинаково, чтобы их было легко связать):",
+        )
+        .replace(
+            "STEP 2 — Открой pull request:",
+            "STEP 2 — Открой pull request в КАЖДОМ репозитории с изменениями (у "
+            "каждого своя ветка по умолчанию: backend → `develop`, frontend → `main`; "
+            "проверь через `git remote show origin`). В описании каждого PR сошлись "
+            "на парный PR другого репозитория:",
+        )
+        .replace(
+            "STEP 3 — Прогоняй PR auto-fixer по только что открытому PR, пока все "
+            "проверки не станут зелёными и PR не будет готов к merge:",
+            "STEP 3 — Прогоняй PR auto-fixer по КАЖДОМУ открытому PR (из корня "
+            "соответствующего репозитория, с его REPO и номером), пока все проверки "
+            "не станут зелёными и оба PR не будут готовы к merge:",
+        )
+        + f"Целевые репозитории:\n{_targets_listing(targets)}\n\n"
+        + generic
+    )
+
+
 # ── callback codec (window_id is the trailing, colon-safe field) ───────────────
 
 
@@ -378,30 +445,85 @@ async def _git_remote_url(repo_path: str) -> str | None:
     return await _run_git(repo_path, "remote", "get-url", "origin")
 
 
-async def _is_git_repo(window_id: str) -> bool:
-    """True when the session's resolved directory is inside a git work tree."""
+def _session_repo_paths(window_id: str) -> list[str]:
+    """Git repos the session spans: the composite list from the sidecar, else
+    the single resolved working directory (workspace-aware)."""
+    sidecar = state.load(window_id)
+    if sidecar is not None and sidecar.project_repos:
+        return list(sidecar.project_repos)
     repo_path = state.resolve_repo(window_id)
-    if not repo_path:
+    return [repo_path] if repo_path else []
+
+
+# A session spanning this many repos (or more) is a full-stack session.
+_COMPOSITE_MIN_REPOS = 2
+
+
+def _is_composite(window_id: str) -> bool:
+    return len(_session_repo_paths(window_id)) >= _COMPOSITE_MIN_REPOS
+
+
+async def _is_git_repo(window_id: str) -> bool:
+    """True when EVERY directory the session spans is inside a git work tree."""
+    paths = _session_repo_paths(window_id)
+    if not paths:
         return False
-    return await _run_git(repo_path, "rev-parse", "--is-inside-work-tree") == "true"
+    for repo_path in paths:
+        if await _run_git(repo_path, "rev-parse", "--is-inside-work-tree") != "true":
+            return False
+    return True
+
+
+async def _detect_pr_repos(window_id: str) -> list[tuple[str, str]]:
+    """``[(repo_path, REPO env)]`` for every session repo that is a known
+    humanprogram repository (keyed off the git ``origin`` remote, so worktrees
+    and clones qualify too). Empty when none qualifies."""
+    targets: list[tuple[str, str]] = []
+    for repo_path in _session_repo_paths(window_id):
+        url = await _git_remote_url(repo_path)
+        if not url:
+            continue
+        for needle, repo in _REPO_BY_REMOTE:
+            if needle in url:
+                targets.append((repo_path, repo))
+                break
+    return targets
 
 
 async def _detect_pr_repo(window_id: str) -> str | None:
-    """Resolve the ``REPO`` env value for the PR-fixer, or None if ineligible.
+    """The first eligible ``REPO`` env value, or None — the menu-gating check."""
+    targets = await _detect_pr_repos(window_id)
+    return targets[0][1] if targets else None
 
-    Keyed off the git ``origin`` remote so it works for worktrees and clones
-    too (not just the canonical project path).
+
+_REPO_ROLE = {"backend": "backend", "frontend": "frontend"}
+
+
+def _scope_preamble(window_id: str, *, ru: bool) -> str:
+    """For full-stack sessions, a lead-in naming every repo the task spans.
+
+    Empty for ordinary single-repo sessions, so their prompts are unchanged.
     """
-    repo_path = state.resolve_repo(window_id)
-    if not repo_path:
-        return None
-    url = await _git_remote_url(repo_path)
-    if not url:
-        return None
-    for needle, repo in _REPO_BY_REMOTE:
-        if needle in url:
-            return repo
-    return None
+    paths = _session_repo_paths(window_id)
+    if len(paths) < _COMPOSITE_MIN_REPOS:
+        return ""
+    listing = "\n".join(f"- {p}" for p in paths)
+    if ru:
+        return (
+            "Это full-stack сессия: она охватывает НЕСКОЛЬКО репозиториев:\n"
+            f"{listing}\n"
+            "Выполни всё, что описано ниже, для КАЖДОГО репозитория, в котором "
+            "есть изменения (git-команды запускай из корня соответствующего "
+            "репозитория или через `git -C <path>`; у каждого репозитория своя "
+            "ветка по умолчанию).\n\n"
+        )
+    return (
+        "This is a full-stack session spanning SEVERAL repositories:\n"
+        f"{listing}\n"
+        "Apply everything below to EACH repository that has changes (run git "
+        "from the repo's root or via `git -C <path>`; each repo has its own "
+        "default branch).\n\n"
+    )
 
 
 # ── shared forward ─────────────────────────────────────────────────────────────
@@ -627,7 +749,7 @@ async def _run_self_review(
         window_id=window_id,
         user_id=user_id,
         thread_id=thread_id,
-        prompt=_SELF_REVIEW_PROMPT,
+        prompt=_scope_preamble(window_id, ru=True) + _SELF_REVIEW_PROMPT,
         anchor=query.message,
         bot=context.bot,
     )
@@ -646,7 +768,7 @@ async def _run_commit_push(
         window_id=window_id,
         user_id=user_id,
         thread_id=thread_id,
-        prompt=_COMMIT_PUSH_PROMPT,
+        prompt=_scope_preamble(window_id, ru=False) + _COMMIT_PUSH_PROMPT,
         anchor=query.message,
         bot=context.bot,
     )
@@ -666,7 +788,7 @@ async def _run_sync_main(
         window_id=window_id,
         user_id=user_id,
         thread_id=thread_id,
-        prompt=_SYNC_MAIN_PROMPT,
+        prompt=_scope_preamble(window_id, ru=False) + _SYNC_MAIN_PROMPT,
         anchor=query.message,
         bot=context.bot,
     )
@@ -685,7 +807,7 @@ async def _run_feature_branch(
         window_id=window_id,
         user_id=user_id,
         thread_id=thread_id,
-        prompt=_FEATURE_BRANCH_PROMPT,
+        prompt=_scope_preamble(window_id, ru=False) + _FEATURE_BRANCH_PROMPT,
         anchor=query.message,
         bot=context.bot,
     )
@@ -695,8 +817,8 @@ async def _run_feature_branch(
 async def _run_full_flow(
     query: Any, window_id: str, user_id: int, thread_id: int, context: Any
 ) -> None:
-    repo = await _detect_pr_repo(window_id)
-    if repo is None:
+    targets = await _detect_pr_repos(window_id)
+    if not targets:
         await query.answer("Not a humanprogram backend/app repo", show_alert=True)
         return
     note = (
@@ -709,7 +831,11 @@ async def _run_full_flow(
         window_id=window_id,
         user_id=user_id,
         thread_id=thread_id,
-        prompt=_full_flow_prompt(repo),
+        prompt=(
+            _full_flow_prompt_multi(targets)
+            if len(targets) > 1
+            else _full_flow_prompt(targets[0][1])
+        ),
         anchor=query.message,
         bot=context.bot,
     )
@@ -733,7 +859,7 @@ async def _run_manual_testing(
         window_id=window_id,
         user_id=user_id,
         thread_id=thread_id,
-        prompt=_MANUAL_TESTING_PROMPT,
+        prompt=_scope_preamble(window_id, ru=True) + _MANUAL_TESTING_PROMPT,
         anchor=query.message,
         bot=context.bot,
     )
@@ -752,10 +878,11 @@ async def _ask_pr_number(
     # Lazy: PTB error type only needed here.
     from telegram.error import TelegramError
 
-    repo = await _detect_pr_repo(window_id)
-    if repo is None:
+    targets = await _detect_pr_repos(window_id)
+    if not targets:
         await query.answer("Not a humanprogram backend/app repo", show_alert=True)
         return
+    repo = targets[0][1]
     msg = query.message
     if msg is None:
         return
@@ -765,17 +892,23 @@ async def _ask_pr_number(
             "thread_id": thread_id,
             "window_id": window_id,
             "repo": repo,
+            "targets": [list(target) for target in targets],
             "prompt_msg_id": msg.message_id,
             "user_id": user_id,
         }
     keyboard = InlineKeyboardMarkup(
         [[InlineKeyboardButton("✖ Cancel", callback_data=_encode("x", window_id))]]
     )
-    with contextlib.suppress(TelegramError):
-        await msg.edit_text(
-            text=f"🤖 PR auto-fixer ({repo}) — reply with the PR number (e.g. 1234).",
-            reply_markup=keyboard,
+    if len(targets) > 1:
+        roles = " ".join(_REPO_ROLE.get(r, r) for _p, r in targets)
+        text = (
+            f"🤖 PR auto-fixer (full-stack: {roles}) — reply with the PR numbers "
+            f"in that order, e.g. `1234 567`; use `-` for a repo without a PR."
         )
+    else:
+        text = f"🤖 PR auto-fixer ({repo}) — reply with the PR number (e.g. 1234)."
+    with contextlib.suppress(TelegramError):
+        await msg.edit_text(text=text, reply_markup=keyboard)
     await query.answer("Send the PR number")
 
 
@@ -823,15 +956,15 @@ async def consume_pr_number_reply(update: Any, context: Any) -> None:
     from telegram.error import TelegramError
 
     bot = context.bot
-    raw = message.text.strip().lstrip("#").strip()
-    if not raw.isdigit():
+    targets = [tuple(target) for target in pend.get("targets") or []]
+    parsed = _parse_pr_reply(message.text, len(targets) if len(targets) > 1 else 1)
+    if parsed is None:
         # Invalid — re-prompt, keep the flow armed, drop the stray reply.
         await _reprompt_invalid(bot, pend)
         with contextlib.suppress(TelegramError):
             await message.delete()
         raise ApplicationHandlerStop
 
-    pr = raw
     repo = pend["repo"]
     window_id = pend["window_id"]
     user_id = pend.get("user_id", 0)
@@ -839,9 +972,22 @@ async def consume_pr_number_reply(update: Any, context: Any) -> None:
     if context.user_data is not None:
         context.user_data.pop(AWAITING_PR_NUMBER, None)
 
+    if len(targets) > 1:
+        chosen = [
+            (path, env, pr)
+            for (path, env), pr in zip(targets, parsed, strict=True)
+            if pr is not None
+        ]
+        summary = ", ".join(f"#{pr} ({env})" for _p, env, pr in chosen)
+        prompt = _pr_fixer_prompt_multi(chosen)
+    else:
+        pr = parsed[0] or ""
+        summary = f"#{pr} ({repo})"
+        prompt = _pr_fixer_prompt(pr, repo)
+
     note = (
         "🤖 Scenario triggered: PR auto-fixer\n"
-        f"Driving PR #{pr} ({repo}) to green — addressing checks & Cursor "
+        f"Driving PR {summary} to green — addressing checks & Cursor "
         "feedback (≤20 iterations)."
     )
     with contextlib.suppress(TelegramError):
@@ -852,7 +998,7 @@ async def consume_pr_number_reply(update: Any, context: Any) -> None:
         window_id=window_id,
         user_id=user_id,
         thread_id=thread_id,
-        prompt=_pr_fixer_prompt(pr, repo),
+        prompt=prompt,
         anchor=message,
         bot=bot,
     )
@@ -860,6 +1006,31 @@ async def consume_pr_number_reply(update: Any, context: Any) -> None:
     with contextlib.suppress(TelegramError):
         await message.delete()
     raise ApplicationHandlerStop
+
+
+def _parse_pr_reply(text: str, expected: int) -> list[str | None] | None:
+    """Parse the PR-number reply.
+
+    Single repo: one number (a leading ``#`` is tolerated). Full-stack: one
+    token per repo in order, each a number or ``-`` (no PR for that repo), with
+    at least one real number. ``None`` when the reply doesn't fit.
+    """
+    tokens = [tok.lstrip("#") for tok in text.split()]
+    if expected <= 1:
+        if len(tokens) != 1 or not tokens[0].isdigit():
+            return None
+        return [tokens[0]]
+    if len(tokens) != expected:
+        return None
+    parsed: list[str | None] = []
+    for tok in tokens:
+        if tok == "-":
+            parsed.append(None)
+        elif tok.isdigit():
+            parsed.append(tok)
+        else:
+            return None
+    return parsed if any(p is not None for p in parsed) else None
 
 
 async def _reprompt_invalid(bot: Any, pend: dict[str, Any]) -> None:
@@ -886,7 +1057,10 @@ async def _reprompt_invalid(bot: Any, pend: dict[str, Any]) -> None:
             chat_id=pend["chat_id"],
             message_id=pend["prompt_msg_id"],
             text=(
-                "🤖 PR auto-fixer — that doesn't look like a PR number. "
+                "🤖 PR auto-fixer — that doesn't look like PR numbers. Reply with "
+                "one number per repo in order (e.g. `1234 567`, `-` for none)."
+                if len(pend.get("targets") or []) > 1
+                else "🤖 PR auto-fixer — that doesn't look like a PR number. "
                 "Reply with just the number, e.g. 1234."
             ),
             reply_markup=keyboard,

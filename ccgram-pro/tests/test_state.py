@@ -362,3 +362,21 @@ def test_resolve_repo_prefers_workspace_path() -> None:
     sidecar.workspace_path = "/clone/here"
     state.save(sidecar)
     assert state.resolve_repo("@r") == "/clone/here"
+
+
+def test_project_repos_round_trips() -> None:
+    ensure_layer_dirs()
+    sidecar = state.WindowSidecar(window_id="@fs", window_creation_epoch=1.0)
+    sidecar.project_repos = ["/srv/hp/backend", "/srv/hp/app"]
+    state.save(sidecar)
+    loaded = state.load("@fs")
+    assert loaded is not None
+    assert loaded.project_repos == ["/srv/hp/backend", "/srv/hp/app"]
+
+
+def test_project_repos_defaults_to_empty() -> None:
+    ensure_layer_dirs()
+    state.save(state.WindowSidecar(window_id="@fs0", window_creation_epoch=1.0))
+    loaded = state.load("@fs0")
+    assert loaded is not None
+    assert loaded.project_repos == []

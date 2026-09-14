@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
+from typing import Any
 
 # Picker selections older than this are considered abandoned and dropped lazily
 # on the next ``get``. 30 minutes is generous for "I'll start the session in a
@@ -63,6 +64,11 @@ class PendingSession:
     # Cached git-ness of the selected project (computed on create / project
     # change) so the keyboard render doesn't shell out on every tap.
     project_is_git: bool = True
+    # Composite ("full-stack") project: one probe result per sub-repo
+    # ({name, path, current, default, dirty, unpushed}). Empty for single-repo
+    # projects. Base mode applies to EACH repo (default → its own default).
+    project_is_composite: bool = False
+    repo_states: list[dict[str, Any]] = field(default_factory=list)
     # True while the base-branch sub-view is showing.
     viewing_base: bool = False
     # Set synchronously when Start begins so a double-tap can't run twice.

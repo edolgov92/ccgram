@@ -448,3 +448,229 @@ async def test_select_base_mode_current_sets_mode() -> None:
     await new_session._select_base_mode(q, s, "current")
     assert s.base_mode == "current"
     assert s.base_branch is None
+
+
+# ── composite (full-stack) projects ──────────────────────────────────────────
+
+
+def _composite_toml() -> None:
+    from ccgram_pro.config import layer_dir
+
+    layer_dir().mkdir(parents=True, exist_ok=True)
+    (layer_dir() / "projects.toml").write_text(
+        '[[project]]\npath = "/srv/hp"\nlabel = "HP Full Stack"\n'
+        'repos = ["backend", "app"]\n'
+    )
+
+
+def _stub_probe_by_path(monkeypatch, states: dict[str, dict]) -> None:
+    monkeypatch.setattr(new_session, "_probe_git", lambda path: states[str(path)])
+
+
+async def test_composite_resolve_aggregates_repo_states(monkeypatch) -> None:
+    _composite_toml()
+    _stub_probe_by_path(
+        monkeypatch,
+        {
+            "/srv/hp/backend": {
+                "is_git": True,
+                "current": "develop",
+                "default": "develop",
+                "dirty": False,
+                "unpushed": False,
+            },
+            "/srv/hp/app": {
+                "is_git": True,
+                "current": "feature/x",
+                "default": "main",
+                "dirty": True,
+                "unpushed": False,
+            },
+        },
+    )
+    s = _session(workspace_strategy="worktree", base_mode="custom", base_branch="z")
+    await new_session._resolve_project_git(s)
+    assert s.project_is_composite is True
+    assert [r["name"] for r in s.repo_states] == ["backend", "app"]
+    assert s.project_is_git is True
+    assert s.current_branch_name == "develop / feature/x"
+    assert s.default_branch_name == "develop / main"
+    assert s.is_dirty is True and s.has_unpushed is False
+    assert s.workspace_strategy == "current"
+    assert s.base_mode == "current" and s.base_branch is None
+
+
+async def test_composite_resolve_promotes_default_when_all_clean(monkeypatch) -> None:
+    _composite_toml()
+    clean = {
+        "is_git": True,
+        "current": "develop",
+        "default": "develop",
+        "dirty": False,
+        "unpushed": False,
+    }
+    _stub_probe_by_path(
+        monkeypatch,
+        {
+            "/srv/hp/backend": clean,
+            "/srv/hp/app": {**clean, "current": "main", "default": "main"},
+        },
+    )
+    s = _session()
+    await new_session._resolve_project_git(s)
+    assert s.base_mode == "default"
+
+
+async def test_composite_resolve_no_default_when_one_repo_lacks_it(monkeypatch) -> None:
+    _composite_toml()
+    _stub_probe_by_path(
+        monkeypatch,
+        {
+            "/srv/hp/backend": {
+                "is_git": True,
+                "current": "develop",
+                "default": "develop",
+                "dirty": False,
+                "unpushed": False,
+            },
+            "/srv/hp/app": {
+                "is_git": True,
+                "current": "main",
+                "default": None,
+                "dirty": False,
+                "unpushed": False,
+            },
+        },
+    )
+    s = _session()
+    await new_session._resolve_project_git(s)
+    assert s.default_branch_name is None
+    assert s.base_mode == "current"
+
+
+def _composite_session(**overrides):
+    return _session(
+        project_is_composite=True,
+        project_is_git=True,
+        repo_states=[
+            {
+                "name": "backend",
+                "path": "/srv/hp/backend",
+                "current": "develop",
+                "default": "develop",
+                "dirty": False,
+                "unpushed": False,
+            },
+            {
+                "name": "app",
+                "path": "/srv/hp/app",
+                "current": "main",
+                "default": "main",
+                "dirty": False,
+                "unpushed": True,
+            },
+        ],
+        current_branch_name="develop / main",
+        default_branch_name="develop / main",
+        **overrides,
+    )
+
+
+def test_composite_render_text_lists_each_repo() -> None:
+    _composite_toml()
+    s = _composite_session(base_mode="default")
+    text = new_session._render_text(s)
+    assert "*backend:* develop — ✅ clean" in text
+    assert "*app:* main — ⚠️ unpushed" in text
+    assert "backend → develop" in text and "app → main" in text
+    assert "switch + pull" in text
+    s.base_mode = "current"
+    assert "each repo stays on its branch" in new_session._render_text(s)
+
+
+def test_composite_keyboard_hides_worktree_clone_and_custom() -> None:
+    _composite_toml()
+    s = _composite_session(base_mode="default")
+    kb = new_session._build_keyboard(s)
+    cbs = [b.callback_data for row in kb.inline_keyboard for b in row]
+    assert "ccgrampro:new:ws:current" in cbs
+    assert "ccgrampro:new:ws:worktree" not in cbs
+    assert "ccgrampro:new:ws:clone" not in cbs
+    assert "ccgrampro:new:basemode:custom" not in cbs
+    assert "ccgrampro:new:basemode:default" in cbs
+    assert "ccgrampro:new:basemode:current" in cbs
+
+
+async def test_composite_ws_selection_locked_to_current() -> None:
+    _composite_toml()
+    s = _composite_session()
+
+    async def _noop(*_a, **_k):
+        return None
+
+    q = SimpleNamespace(answer=_noop, edit_message_text=_noop)
+    await new_session._apply_selection(q, s, "ws:worktree")
+    assert s.workspace_strategy == "current"
+
+
+async def test_composite_custom_base_refused() -> None:
+    s = _composite_session()
+    answers: list[tuple] = []
+
+    async def _answer(*a, **k):
+        answers.append((a, k))
+
+    await new_session._open_base_view(SimpleNamespace(answer=_answer), s)
+    assert s.viewing_base is False
+    assert answers and answers[0][1].get("show_alert") is True
+
+
+async def test_composite_provision_applies_base_to_each_repo(monkeypatch) -> None:
+    from pathlib import Path
+
+    calls: list[tuple[str, str | None]] = []
+
+    async def _fake_provision(session, repo, *, default_name=None):  # noqa: ANN001
+        calls.append((str(repo), default_name))
+
+    monkeypatch.setattr(new_session, "_provision_current", _fake_provision)
+    s = _composite_session(base_mode="default")
+    from ccgram_pro.config import Project
+
+    project = Project(path=Path("/srv/hp"), label="FS", repos=("backend", "app"))
+    cwd = await new_session._provision_cwd(s, project, Path("/srv/hp"))
+    assert cwd == Path("/srv/hp")
+    assert calls == [("/srv/hp/backend", "develop"), ("/srv/hp/app", "main")]
+
+
+async def test_composite_finalize_persists_project_repos(monkeypatch) -> None:
+    from pathlib import Path
+
+    import ccgram.thread_router as tr
+    from ccgram_pro import state
+    from ccgram_pro.config import ensure_layer_dirs
+
+    ensure_layer_dirs()
+    monkeypatch.setattr(
+        tr, "thread_router", SimpleNamespace(get_window_for_thread=lambda u, t: "@fs")
+    )
+
+    async def _noop(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(new_session, "_capture_session_anchor", _noop)
+    s = _composite_session(base_mode="current")
+    wid = await new_session._finalize_start(
+        3,
+        s,
+        None,
+        None,
+        Path("/srv/hp"),
+        None,
+        project_repos=["/srv/hp/backend", "/srv/hp/app"],
+    )
+    assert wid == "@fs"
+    loaded = state.load("@fs")
+    assert loaded is not None
+    assert loaded.project_repos == ["/srv/hp/backend", "/srv/hp/app"]
+    assert loaded.project_path == "/srv/hp"

@@ -118,6 +118,10 @@ class WindowSidecar:
     # (absolute path). Persisted so teardown can run ``git worktree remove`` /
     # delete snapshot refs against the right repo without re-deriving it.
     source_repo_path: str | None = None
+    # Composite ("full-stack") project: absolute paths of every git repo the
+    # session spans (e.g. backend + app). Empty for ordinary single-repo
+    # sessions. Scenarios use it to run git/PR/test flows across all of them.
+    project_repos: list[str] = field(default_factory=list)
 
 
 def _sidecar_path(window_id: str) -> Path:
@@ -279,6 +283,9 @@ def _deserialize(raw: str, window_id: str, path: Path) -> WindowSidecar | None:
             workspace_path=data.get("workspace_path") or None,
             last_activity_at=last_activity_at,
             source_repo_path=data.get("source_repo_path") or None,
+            project_repos=[
+                p for p in (data.get("project_repos") or []) if isinstance(p, str)
+            ],
         )
     except (TypeError, ValueError) as exc:
         _quarantine(path, f"reconstruct failed: {exc}")

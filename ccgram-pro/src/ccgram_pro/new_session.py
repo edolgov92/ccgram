@@ -266,6 +266,10 @@ def _base_mode_row(session: store.PendingSession) -> list[Any]:
         callback_data=f"{_CB_PREFIX}basemode:current",
     )
 
+    if session.project_is_composite:
+        # One branch can't span two repos — full-stack offers default/current only.
+        return [default_btn, cur_btn]
+
     custom_mark = "● " if session.base_mode == "custom" else ""
     custom_label = (
         session.base_branch
@@ -311,11 +315,13 @@ def _build_keyboard(session: store.PendingSession) -> Any:
     rows.append(_radio_row(_EFFORTS, session.effort_key, "effort"))
     rows.append(_radio_row(_MODES, session.mode, "mode"))
 
-    ws_options = (
-        _WORKSPACES
-        if session.project_is_git
-        else [o for o in _WORKSPACES if o[0] in _NON_GIT_WORKSPACES]
-    )
+    if session.project_is_composite:
+        # Parent-directory cwd: worktree/clone can't span two repos.
+        ws_options = [o for o in _WORKSPACES if o[0] == "current"]
+    elif session.project_is_git:
+        ws_options = _WORKSPACES
+    else:
+        ws_options = [o for o in _WORKSPACES if o[0] in _NON_GIT_WORKSPACES]
     rows.append(_radio_row(ws_options, session.workspace_strategy, "ws"))
 
     if session.project_is_git:
@@ -405,14 +411,11 @@ def _render_text(session: store.PendingSession) -> str:
         f"🧭 *Mode:* {mode_label}",
         f"🗂 *Workspace:* {ws_label}",
     ]
-    if session.project_is_git:
+    if session.project_is_composite:
+        lines.extend(_composite_branch_lines(session))
+    elif session.project_is_git:
         cur = session.current_branch_name or "?"
-        flags = []
-        if session.is_dirty:
-            flags.append("uncommitted")
-        if session.has_unpushed:
-            flags.append("unpushed")
-        status = "✅ clean" if not flags else "⚠️ " + " + ".join(flags)
+        status = _branch_status(session.is_dirty, session.has_unpushed)
         lines.append(f"⎇ *Branch:* {cur} — {status}")
         if session.base_mode == "default":
             base_desc = (
@@ -424,6 +427,32 @@ def _render_text(session: store.PendingSession) -> str:
             base_desc = f"current ({cur})"
         lines.append(f"⎇ *Base:* {base_desc}")
     return "\n".join(lines)
+
+
+def _branch_status(is_dirty: bool, has_unpushed: bool) -> str:
+    flags = []
+    if is_dirty:
+        flags.append("uncommitted")
+    if has_unpushed:
+        flags.append("unpushed")
+    return "✅ clean" if not flags else "⚠️ " + " + ".join(flags)
+
+
+def _composite_branch_lines(session: store.PendingSession) -> list[str]:
+    """One branch/status line per sub-repo, then the base line for all of them."""
+    lines = [
+        f"⎇ *{s.get('name')}:* {s.get('current') or '?'} — "
+        f"{_branch_status(bool(s.get('dirty')), bool(s.get('unpushed')))}"
+        for s in session.repo_states
+    ]
+    if session.base_mode == "default":
+        targets = ", ".join(
+            f"{s.get('name')} → {s.get('default') or '?'}" for s in session.repo_states
+        )
+        lines.append(f"⎇ *Base:* default ({targets}; switch + pull)")
+    else:
+        lines.append("⎇ *Base:* current (each repo stays on its branch)")
+    return lines
 
 
 # ── show the picker ─────────────────────────────────────────────────────────
@@ -506,24 +535,67 @@ def _probe_git(path: Path | str) -> dict[str, Any]:
     return info
 
 
+async def _resolve_composite_git(session: store.PendingSession, project: Any) -> None:
+    """Probe every sub-repo of a composite project and fill the aggregate fields."""
+    # Lazy: only needed in this branch.
+    import asyncio
+
+    states: list[dict[str, Any]] = []
+    for name, repo_path in zip(project.repos, project.repo_paths, strict=True):
+        info = await asyncio.to_thread(_probe_git, repo_path)
+        states.append({"name": name, "path": str(repo_path), **info})
+    session.project_is_composite = True
+    session.repo_states = states
+    session.project_is_git = all(bool(s.get("is_git")) for s in states)
+    session.current_branch_name = " / ".join(
+        str(s.get("current") or "?") for s in states
+    )
+    defaults = [s.get("default") for s in states]
+    session.default_branch_name = (
+        " / ".join(str(d) for d in defaults) if all(defaults) else None
+    )
+    session.is_dirty = any(bool(s.get("dirty")) for s in states)
+    session.has_unpushed = any(bool(s.get("unpushed")) for s in states)
+    # Parent-directory cwd: worktree/clone and a single custom branch can't
+    # span two repos.
+    session.workspace_strategy = "current"
+    if session.base_mode == "custom":
+        session.base_mode = "current"
+        session.base_branch = None
+
+
 async def _resolve_project_git(session: store.PendingSession) -> None:
-    """Cache the selected project's git-ness + branch status; pick a base mode."""
+    """Cache the selected project's git-ness + branch status; pick a base mode.
+
+    Composite ("full-stack") projects probe EVERY sub-repo: the card shows one
+    status line per repo, and the aggregate (dirty/unpushed if ANY repo is,
+    default known only if EVERY repo's is) drives the base-mode rules. Their
+    cwd is the parent directory, so worktree/clone and a custom branch (one
+    branch can't span two repos) are not offered.
+    """
     projects = load_projects()
     if not (0 <= session.project_idx < len(projects)):
         session.project_is_git = False
+        session.project_is_composite = False
+        session.repo_states = []
         return
     # Lazy: only needed in this branch.
     import asyncio
 
-    path = projects[session.project_idx].path
-    info = await asyncio.to_thread(_probe_git, path)
-    session.project_is_git = bool(info.get("is_git"))
-    session.current_branch_name = info.get("current")
-    session.default_branch_name = info.get("default")
-    session.is_dirty = bool(info.get("dirty"))
-    session.has_unpushed = bool(info.get("unpushed"))
-    if not session.project_is_git and session.workspace_strategy == "worktree":
-        session.workspace_strategy = "current"
+    project = projects[session.project_idx]
+    if project.is_composite:
+        await _resolve_composite_git(session, project)
+    else:
+        session.project_is_composite = False
+        session.repo_states = []
+        info = await asyncio.to_thread(_probe_git, project.path)
+        session.project_is_git = bool(info.get("is_git"))
+        session.current_branch_name = info.get("current")
+        session.default_branch_name = info.get("default")
+        session.is_dirty = bool(info.get("dirty"))
+        session.has_unpushed = bool(info.get("unpushed"))
+        if not session.project_is_git and session.workspace_strategy == "worktree":
+            session.workspace_strategy = "current"
     # Default base mode: switch to the repo's default branch — but fall back to
     # "current" when that's blocked (dirty/unpushed tree, or no detectable default).
     if session.base_mode != "custom":
@@ -594,6 +666,13 @@ async def _dispatch_new_session(update: Any, context: Any) -> None:
     await _apply_selection(query, session, action)
 
 
+def _allowed_workspaces(session: store.PendingSession) -> set[str]:
+    """Workspace strategies a session may pick: composite → parent-dir only."""
+    if session.project_is_composite:
+        return {"current"}
+    return _WORKSPACE_KEYS if session.project_is_git else _NON_GIT_WORKSPACES
+
+
 async def _apply_selection(
     query: Any, session: store.PendingSession, action: str
 ) -> None:
@@ -637,8 +716,7 @@ async def _apply_selection(
             session.mode = key
     elif action.startswith("ws:"):
         key = action.split(":", 1)[1]
-        allowed = _WORKSPACE_KEYS if session.project_is_git else _NON_GIT_WORKSPACES
-        if key in allowed:
+        if key in _allowed_workspaces(session):
             session.workspace_strategy = key
     elif action.startswith("basemode:"):
         await _select_base_mode(query, session, action.split(":", 1)[1])
@@ -662,6 +740,13 @@ async def _apply_selection(
 async def _open_base_view(query: Any, session: store.PendingSession) -> None:
     if not session.project_is_git:
         await query.answer("Not a git project")
+        return
+    if session.project_is_composite:
+        await query.answer(
+            "Full-stack sessions start each repo from its own default branch — "
+            "a custom branch isn't available here.",
+            show_alert=True,
+        )
         return
     if not session.branch_choices:
         # Lazy: only needed in this branch.
@@ -865,7 +950,15 @@ async def _handle_start(
         _override_plan = False
 
     created_wid = await _finalize_start(
-        user_id, session, clone_dest, worktree_dest, repo, project.default_preamble
+        user_id,
+        session,
+        clone_dest,
+        worktree_dest,
+        repo,
+        project.default_preamble,
+        project_repos=(
+            [str(p) for p in project.repo_paths] if project.is_composite else None
+        ),
     )
     if created_wid is not None:
         # Bound successfully — delete the picker card instead of leaving
@@ -906,6 +999,7 @@ async def _finalize_start(
     worktree_dest: Path | None,
     repo: Path,
     project_preamble: str | None = None,
+    project_repos: list[str] | None = None,
 ) -> str | None:
     """Resolve the created window, persist the sidecar, and clear the store.
 
@@ -929,6 +1023,7 @@ async def _finalize_start(
     async with state.transaction(created_wid):
         sidecar = state.get_or_create(created_wid)
         sidecar.project_path = str(repo)
+        sidecar.project_repos = list(project_repos or [])
         sidecar.project_preamble = project_preamble
         sidecar.model = session.model_key
         sidecar.reasoning = session.effort_key
@@ -999,8 +1094,14 @@ class _StartError(RuntimeError):
     """A one-line, user-facing reason the session could not start."""
 
 
-async def _provision_current(session: store.PendingSession, repo: Path) -> None:
+async def _provision_current(
+    session: store.PendingSession, repo: Path, *, default_name: str | None = None
+) -> None:
     """Apply the chosen base mode to the current repo before launch.
+
+    ``default_name`` overrides the session-level default branch — composite
+    projects pass each sub-repo's own default (the session field holds a
+    joined display string there).
 
     - ``default`` → check out the repo's default branch (re-detect if needed)
       and fast-forward pull. Refuses on a dirty tree (the picker already blocks
@@ -1022,8 +1123,10 @@ async def _provision_current(session: store.PendingSession, repo: Path) -> None:
     )
 
     if session.base_mode == "default":
-        target = session.default_branch_name or await asyncio.to_thread(
-            default_branch, repo
+        target = (
+            default_name
+            or (None if session.project_is_composite else session.default_branch_name)
+            or await asyncio.to_thread(default_branch, repo)
         )
         if not target:
             raise _StartError("Couldn't detect the repo's default branch.")
@@ -1075,6 +1178,19 @@ async def _provision_cwd(
     import asyncio
 
     strategy = session.workspace_strategy
+    if getattr(project, "is_composite", False):
+        # Full-stack: apply the base mode to EVERY sub-repo (each to its own
+        # default); the window runs in the parent directory.
+        states = session.repo_states or [
+            {"path": str(p), "default": None} for p in project.repo_paths
+        ]
+        for repo_state in states:
+            await _provision_current(
+                session,
+                Path(repo_state["path"]),
+                default_name=repo_state.get("default"),
+            )
+        return repo
     if strategy == "current":
         await _provision_current(session, repo)
         return repo

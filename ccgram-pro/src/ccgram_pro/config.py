@@ -125,6 +125,11 @@ class Project:
     this project (e.g. ``hp-app`` → ``hp-app``, ``hp-app-2`` …), so topics are
     distinguishable across projects instead of colliding on ``app``/``backend``.
     Empty falls back to the project directory name.
+    ``repos``, when set, makes this a **composite** ("full-stack") project:
+    ``path`` is a parent directory and each entry is a sub-directory holding
+    its own git repository (e.g. ``["backend", "app"]``). The session's cwd is
+    the parent; branch operations run per sub-repo (each switches to its OWN
+    default branch), and scenarios span every listed repo.
     """
 
     path: Path
@@ -134,6 +139,16 @@ class Project:
     default_preamble: str | None = None
     install_command: str | None = None
     short_name: str = ""
+    repos: tuple[str, ...] = ()
+
+    @property
+    def is_composite(self) -> bool:
+        return bool(self.repos)
+
+    @property
+    def repo_paths(self) -> list[Path]:
+        """Absolute paths of the git repos this project spans (self for single)."""
+        return [self.path / r for r in self.repos] if self.repos else [self.path]
 
 
 def load_projects(path: Path | None = None) -> list[Project]:
@@ -167,6 +182,12 @@ def load_projects(path: Path | None = None) -> list[Project]:
         install_command = (
             str(install_command_raw) if isinstance(install_command_raw, str) else None
         )
+        repos_raw = entry.get("repos", [])
+        repos = (
+            tuple(r for r in repos_raw if isinstance(r, str) and r.strip())
+            if isinstance(repos_raw, list)
+            else ()
+        )
         projects.append(
             Project(
                 path=project_path,
@@ -176,6 +197,7 @@ def load_projects(path: Path | None = None) -> list[Project]:
                 default_preamble=entry.get("default_preamble"),
                 install_command=install_command,
                 short_name=str(entry.get("short_name", "")),
+                repos=repos,
             )
         )
     return projects
