@@ -67,8 +67,12 @@ async def check_autoclose_timers(client: TelegramClient) -> None:
         # never auto-delete a live session's topic — if the window is alive,
         # cancel the timer and resume normal tracking instead.
         if state == "dead":
+            # Independent probe: ``find_window_by_id`` shares ``list_windows``
+            # with the check that marked this dead, so a transient tmux error
+            # would be confirmed rather than caught. Anything but a definitive
+            # "gone" (False) cancels the deletion — this path destroys a topic.
             wid = thread_router.get_window_for_thread(user_id, thread_id)
-            if wid and await tmux_manager.find_window_by_id(wid) is not None:
+            if wid and await tmux_manager.window_exists(wid) is not False:
                 lifecycle_strategy.clear_autoclose_timer(user_id, thread_id)
                 lifecycle_strategy.clear_dead_notification(user_id, thread_id)
                 logger.warning(

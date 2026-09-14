@@ -263,6 +263,48 @@ class TmuxManager:
                 return window
         return None
 
+    async def window_exists(self, window_id: str) -> bool | None:
+        """Does this window exist? ``None`` when tmux could not be asked.
+
+        Deliberately INDEPENDENT of :meth:`list_windows` / libtmux: it shells
+        out to ``tmux list-windows`` directly. ``list_windows`` swallows a
+        libtmux error into an empty list, so "tmux query failed" and "there are
+        no windows" are indistinguishable there — and since
+        :meth:`find_window_by_id` is built on it, a single transient tmux error
+        made every live session look dead (spurious "Session ended" banners,
+        and the dead-autoclose path deleting a working topic). Callers must
+        treat ``None`` as "unknown" and never act destructively on it.
+        """
+        session_name = self.session_name
+        if is_foreign_window(window_id):
+            session_name, window_id = window_id.rsplit(":", 1)
+        proc: asyncio.subprocess.Process | None = None
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "tmux",
+                "list-windows",
+                "-t",
+                session_name,
+                "-F",
+                "#{window_id}",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            async with asyncio.timeout(5.0):
+                stdout, _ = await proc.communicate()
+        except TimeoutError:
+            if proc:
+                with contextlib.suppress(ProcessLookupError):
+                    proc.kill()
+                    await proc.wait()
+            return None
+        except OSError:
+            return None
+        if proc.returncode != 0:
+            return None  # tmux refused to answer — "unknown", never "gone"
+        ids = {line.strip() for line in stdout.decode("utf-8", "replace").splitlines()}
+        return window_id in ids
+
     async def _find_foreign_window(self, qualified_id: str) -> TmuxWindow | None:
         """Check if a foreign tmux window exists and return TmuxWindow."""
         session_name, window_id_part = qualified_id.rsplit(":", 1)

@@ -95,6 +95,7 @@ class TestCheckAutocloseTimers:
             mock_config.autoclose_dead_minutes = 1
             mock_router.get_window_for_thread.return_value = "@0"
             mock_tm.find_window_by_id = AsyncMock(return_value=MagicMock())  # alive
+            mock_tm.window_exists = AsyncMock(return_value=True)
             await check_autoclose_timers(bot)
         bot.delete_forum_topic.assert_not_called()
         assert lifecycle_strategy.is_dead_notified(user_id, thread_id, "@0") is False
@@ -121,6 +122,7 @@ class TestCheckAutocloseTimers:
             mock_router.resolve_chat_id.return_value = 42
             mock_router.get_window_for_thread.return_value = "@0"
             mock_tm.find_window_by_id = AsyncMock(return_value=None)  # really gone
+            mock_tm.window_exists = AsyncMock(return_value=False)
             await check_autoclose_timers(bot)
         bot.delete_forum_topic.assert_called_once()
 
@@ -254,6 +256,7 @@ class TestProbeTopicExistence:
             mock_tmux.find_window_by_id = AsyncMock(
                 return_value=MagicMock(window_id="@0")
             )
+            mock_tmux.window_exists = AsyncMock(return_value=True)
             mock_wq.view_window.return_value = _window_view("manual_discovered")
             mock_tmux.kill_window = AsyncMock()
 
@@ -276,6 +279,7 @@ class TestProbeTopicExistence:
             mock_tmux.find_window_by_id = AsyncMock(
                 return_value=MagicMock(window_id="@0")
             )
+            mock_tmux.window_exists = AsyncMock(return_value=True)
             mock_wq.view_window.return_value = _window_view("ccgram_created")
             mock_tmux.kill_window = AsyncMock()
 
@@ -300,6 +304,7 @@ class TestProbeTopicExistence:
             mock_tmux.find_window_by_id = AsyncMock(
                 return_value=MagicMock(window_id="@0")
             )
+            mock_tmux.window_exists = AsyncMock(return_value=True)
             mock_wq.view_window.return_value = _window_view("ccgram_created")
             mock_tmux.kill_window = AsyncMock()
 

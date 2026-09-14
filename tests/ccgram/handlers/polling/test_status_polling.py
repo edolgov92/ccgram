@@ -553,6 +553,7 @@ def _mock_update_status_patches(*, pyte_result, provider):
     mock_window.pane_width = 80
     mock_window.pane_height = 24
     mocks["tm"].find_window_by_id = AsyncMock(return_value=mock_window)
+    mocks["tm"].window_exists = AsyncMock(return_value=True)
     mocks["tm"].capture_pane = AsyncMock(return_value="\x1b[1msome ansi output\x1b[0m")
     mocks["tm"].get_pane_title = AsyncMock(return_value="")
     mocks["tr"].resolve_chat_id.return_value = -100
@@ -745,6 +746,7 @@ class TestProbeFailures:
             mock_tm.find_window_by_id = AsyncMock(
                 return_value=mock_window if window_alive else None
             )
+            mock_tm.window_exists = AsyncMock(return_value=True)
             mock_tm.kill_window = AsyncMock()
             await probe_topic_existence(bot)
             mock_cleanup.assert_not_called()
@@ -815,6 +817,7 @@ class TestProviderSwitchPromptSetup:
             mock_tmux.find_window_by_id = AsyncMock(
                 return_value=MagicMock(pane_current_command="fish", cwd="/proj")
             )
+            mock_tmux.window_exists = AsyncMock(return_value=True)
             await discover_and_register_transcript(
                 "@7", client=bot, user_id=1, thread_id=42
             )
@@ -865,6 +868,7 @@ class TestProviderSwitchPromptSetup:
             mock_tmux.find_window_by_id = AsyncMock(
                 return_value=MagicMock(pane_current_command="claude", cwd="/proj")
             )
+            mock_tmux.window_exists = AsyncMock(return_value=True)
             await discover_and_register_transcript(
                 "@7", client=bot, user_id=1, thread_id=42
             )
@@ -909,6 +913,7 @@ class TestProviderSwitchPromptSetup:
             mock_tmux.find_window_by_id = AsyncMock(
                 return_value=MagicMock(pane_current_command="bash", cwd="/proj")
             )
+            mock_tmux.window_exists = AsyncMock(return_value=True)
             mock_tmux.get_pane_title = AsyncMock(return_value="")
             mock_config.tmux_session_name = "ccgram"
             await discover_and_register_transcript(
@@ -960,6 +965,7 @@ class TestProviderSwitchPromptSetup:
             mock_tmux.find_window_by_id = AsyncMock(
                 return_value=MagicMock(pane_current_command="bash", cwd="/proj")
             )
+            mock_tmux.window_exists = AsyncMock(return_value=True)
             mock_tmux.get_pane_title = AsyncMock(return_value="")
             mock_config.tmux_session_name = "ccgram"
             await discover_and_register_transcript("@7")
@@ -1056,6 +1062,7 @@ class TestProviderSwitchChain:
                     pane_current_command="fish", cwd="/proj", pane_tty=""
                 )
             )
+            mock_tmux.window_exists = AsyncMock(return_value=True)
             await discover_and_register_transcript(
                 "@7", client=bot, user_id=1, thread_id=42
             )
@@ -1074,6 +1081,7 @@ class TestProviderSwitchChain:
                     pane_current_command="gemini", cwd="/proj", pane_tty=""
                 )
             )
+            mock_tmux.window_exists = AsyncMock(return_value=True)
             await discover_and_register_transcript(
                 "@7", client=bot, user_id=1, thread_id=42
             )
@@ -1090,6 +1098,7 @@ class TestProviderSwitchChain:
                     pane_current_command="fish", cwd="/proj", pane_tty=""
                 )
             )
+            mock_tmux.window_exists = AsyncMock(return_value=True)
             await discover_and_register_transcript(
                 "@7", client=bot, user_id=1, thread_id=42
             )
@@ -1144,6 +1153,7 @@ class TestMaybeDiscoverTranscript:
             mock_tmux.find_window_by_id = AsyncMock(
                 return_value=MagicMock(pane_current_command="bun")
             )
+            mock_tmux.window_exists = AsyncMock(return_value=True)
             mock_tmux.get_pane_title = AsyncMock(return_value="")
             mock_config.tmux_session_name = "ccgram"
             await discover_and_register_transcript("@7")
@@ -1167,6 +1177,7 @@ class TestMaybeDiscoverTranscript:
         ):
             mock_ws.window_states = {"@7": MagicMock(session_id="", cwd="")}
             mock_tmux.find_window_by_id = AsyncMock(return_value=None)
+            mock_tmux.window_exists = AsyncMock(return_value=False)
             await discover_and_register_transcript("@7")
         mock_sm.register_hookless_session.assert_not_called()
 
@@ -1211,6 +1222,7 @@ class TestMaybeDiscoverTranscript:
         ):
             mock_ws.window_states = {"@7": mock_state}
             mock_tmux.find_window_by_id = AsyncMock(return_value=mock_window)
+            mock_tmux.window_exists = AsyncMock(return_value=True)
             mock_tmux.get_pane_title = AsyncMock(return_value="")
             mock_config.tmux_session_name = "ccgram"
             await discover_and_register_transcript("@7")
@@ -1300,6 +1312,7 @@ class TestMaybeDiscoverTranscript:
             mock_config.tmux_session_name = "ccgram"
             mock_window = MagicMock(pane_current_command="bun")
             mock_tmux.find_window_by_id = AsyncMock(return_value=mock_window)
+            mock_tmux.window_exists = AsyncMock(return_value=True)
             mock_tmux.get_pane_title = AsyncMock(return_value="")
             await discover_and_register_transcript("@7")
 
@@ -1375,6 +1388,7 @@ class TestMaybeDiscoverTranscript:
             mock_tmux.find_window_by_id = AsyncMock(
                 return_value=MagicMock(pane_current_command="bun")
             )
+            mock_tmux.window_exists = AsyncMock(return_value=True)
             mock_tmux.get_pane_title = AsyncMock(return_value="")
             await discover_and_register_transcript("@7")
 
@@ -1429,6 +1443,7 @@ class TestMaybeDiscoverTranscript:
             mock_tmux.find_window_by_id = AsyncMock(
                 return_value=MagicMock(pane_current_command="bun")
             )
+            mock_tmux.window_exists = AsyncMock(return_value=True)
             mock_tmux.get_pane_title = AsyncMock(return_value="")
             await discover_and_register_transcript("@7")
 
@@ -1472,6 +1487,7 @@ class TestMaybeDiscoverTranscript:
             mock_tmux.find_window_by_id = AsyncMock(
                 return_value=MagicMock(pane_current_command="bun")
             )
+            mock_tmux.window_exists = AsyncMock(return_value=True)
             mock_tmux.get_pane_title = AsyncMock(return_value="")
             await discover_and_register_transcript("@7")
 
@@ -1523,6 +1539,7 @@ class TestMaybeDiscoverTranscript:
             mock_config.tmux_session_name = "ccgram"
             mock_window = MagicMock(pane_current_command="bun")
             mock_tmux.find_window_by_id = AsyncMock(return_value=mock_window)
+            mock_tmux.window_exists = AsyncMock(return_value=True)
             mock_tmux.get_pane_title = AsyncMock(return_value="")
             mock_asyncio.to_thread = AsyncMock(side_effect=[event, None])
             await discover_and_register_transcript("@7")
@@ -1594,6 +1611,7 @@ class TestMaybeDiscoverTranscript:
             }
             mock_config.tmux_session_name = "ccgram"
             mock_tmux.find_window_by_id = AsyncMock(return_value=mock_window)
+            mock_tmux.window_exists = AsyncMock(return_value=True)
             mock_tmux.get_pane_title = AsyncMock(return_value="")
             await discover_and_register_transcript("@7")
 
@@ -1677,6 +1695,7 @@ class TestMaybeDiscoverTranscript:
             mock_tmux.find_window_by_id = AsyncMock(
                 return_value=MagicMock(pane_current_command="bun")
             )
+            mock_tmux.window_exists = AsyncMock(return_value=True)
             mock_tmux.get_pane_title = AsyncMock(return_value="")
             await discover_and_register_transcript("@7")
 
@@ -1710,6 +1729,7 @@ class TestMaybeDiscoverTranscript:
                 "@7": MagicMock(session_id="", cwd="/proj", provider_name="")
             }
             mock_tmux.find_window_by_id = AsyncMock(return_value=mock_window)
+            mock_tmux.window_exists = AsyncMock(return_value=True)
             await discover_and_register_transcript("@7")
 
         mock_sm.register_hookless_session.assert_not_called()
@@ -1750,6 +1770,7 @@ class TestMaybeDiscoverTranscript:
             mock_tmux.find_window_by_id = AsyncMock(
                 return_value=MagicMock(pane_current_command="bun")
             )
+            mock_tmux.window_exists = AsyncMock(return_value=True)
             mock_tmux.get_pane_title = AsyncMock(return_value="")
             mock_asyncio.to_thread = AsyncMock(return_value=None)
             await discover_and_register_transcript("@7")
@@ -1792,6 +1813,7 @@ class TestMaybeDiscoverTranscript:
             }
             mock_config.tmux_session_name = "ccgram"
             mock_tmux.find_window_by_id = AsyncMock(return_value=None)
+            mock_tmux.window_exists = AsyncMock(return_value=False)
             mock_asyncio.to_thread = AsyncMock(return_value=None)
             await discover_and_register_transcript("@7")
 
@@ -1873,6 +1895,7 @@ class TestMaybeDiscoverTranscript:
                     cwd="/Users/alexei/Workspace/ccgram",
                 )
             )
+            mock_tmux.window_exists = AsyncMock(return_value=True)
             mock_tmux.get_pane_title = AsyncMock(return_value="◇  Ready (ccbot)")
             mock_config.tmux_session_name = "ccgram"
             await discover_and_register_transcript("@7")
@@ -1971,6 +1994,7 @@ class TestMaybeDiscoverTranscript:
                     cwd="/Users/alexei/Workspace/ccgram",
                 )
             )
+            mock_tmux.window_exists = AsyncMock(return_value=True)
             mock_config.tmux_session_name = "ccgram"
             await discover_and_register_transcript("@7")
 
@@ -2098,6 +2122,7 @@ class TestDeadWindowNotification:
             mock_tr.get_display_name.return_value = "test"
             mock_sm.view_window.return_value = MagicMock(cwd="/proj")
             mock_tm.find_window_by_id = AsyncMock(return_value=None)  # confirmed gone
+            mock_tm.window_exists = AsyncMock(return_value=False)
             await _handle_dead_window_notification(bot, 1, 42, "@5")
 
         assert (1, 42, "@5") in _dead_notified
@@ -2131,6 +2156,7 @@ class TestDeadWindowNotification:
             mock_tr.get_display_name.return_value = "test"
             mock_sm.view_window.return_value = MagicMock(cwd="/proj")
             mock_tm.find_window_by_id = AsyncMock(return_value=None)  # confirmed gone
+            mock_tm.window_exists = AsyncMock(return_value=False)
             await _handle_dead_window_notification(bot, 1, 42, "@5")
             await _handle_dead_window_notification(bot, 1, 42, "@5")
 
@@ -2153,6 +2179,7 @@ class TestDeadWindowNotification:
             patch("ccgram.handlers.polling.window_tick.apply.tmux_manager") as mock_tm,
         ):
             mock_tm.find_window_by_id = AsyncMock(return_value=MagicMock())  # alive
+            mock_tm.window_exists = AsyncMock(return_value=True)
             await _handle_dead_window_notification(bot, 1, 77, "@9")
 
         mock_send.assert_not_called()
@@ -2183,6 +2210,7 @@ class TestDeadWindowNotification:
             mock_tr.iter_thread_bindings.return_value = [(1, 42, "@5")]
             mock_tr.resolve_chat_id.return_value = -100
             mock_tm.find_window_by_id = AsyncMock(return_value=mock_window)
+            mock_tm.window_exists = AsyncMock(return_value=True)
             mock_tm.kill_window = AsyncMock()
             await probe_topic_existence(bot)
             await probe_topic_existence(bot)
@@ -2379,6 +2407,7 @@ class TestUpdateStatusMessageEdgeCases:
             ) as mock_enqueue,
         ):
             mock_tm.find_window_by_id = AsyncMock(return_value=None)
+            mock_tm.window_exists = AsyncMock(return_value=False)
             await update_status_message(bot, 1, "@0", thread_id=42)
         mock_enqueue.assert_called_once_with(ANY, 1, "@0", None, thread_id=42)
 
@@ -2400,6 +2429,7 @@ class TestUpdateStatusMessageEdgeCases:
             ) as mock_enqueue,
         ):
             mock_tm.find_window_by_id = AsyncMock(return_value=mock_window)
+            mock_tm.window_exists = AsyncMock(return_value=True)
             mock_tm.capture_pane = AsyncMock(return_value=None)
             await update_status_message(bot, 1, "@0", thread_id=42)
         mock_enqueue.assert_not_called()
@@ -2448,6 +2478,7 @@ class TestUpdateStatusMessageEdgeCases:
             ),
         ):
             mock_tm.find_window_by_id = AsyncMock(return_value=mock_window)
+            mock_tm.window_exists = AsyncMock(return_value=True)
             mock_tm.capture_pane = AsyncMock(return_value="\x1b[1mansi\x1b[0m")
             mock_tr.resolve_chat_id.return_value = -100
             mock_tr.get_display_name.return_value = "project"
@@ -2495,6 +2526,7 @@ class TestUpdateStatusMessageEdgeCases:
             ),
         ):
             mock_tm.find_window_by_id = AsyncMock(return_value=mock_window)
+            mock_tm.window_exists = AsyncMock(return_value=True)
             mock_tm.capture_pane = AsyncMock(return_value="some output")
             mock_tr.resolve_chat_id.return_value = -100
             mock_tr.get_display_name.return_value = "project"
@@ -2551,6 +2583,7 @@ class TestUpdateStatusMessageEdgeCases:
             ),
         ):
             mock_tm.find_window_by_id = AsyncMock(return_value=mock_window)
+            mock_tm.window_exists = AsyncMock(return_value=True)
             mock_tm.capture_pane = AsyncMock(return_value="some output")
             mock_tr.resolve_chat_id.return_value = -100
             mock_tr.get_display_name.return_value = "project"
@@ -2601,6 +2634,7 @@ class TestUpdateStatusMessageEdgeCases:
             ),
         ):
             mock_tm.find_window_by_id = AsyncMock(return_value=mock_window)
+            mock_tm.window_exists = AsyncMock(return_value=True)
             mock_tm.capture_pane = AsyncMock(return_value="some output")
             mock_tr.resolve_chat_id.return_value = -100
             mock_tr.get_display_name.return_value = "project"
@@ -2647,6 +2681,7 @@ class TestUpdateStatusMessageEdgeCases:
             patch("ccgram.tmux_manager.notify_vim_insert_seen"),
         ):
             mock_tm.find_window_by_id = AsyncMock(return_value=mock_window)
+            mock_tm.window_exists = AsyncMock(return_value=True)
             mock_tm.capture_pane = AsyncMock(return_value="Allow?\nEsc\n")
             await update_status_message(bot, 1, "@0", thread_id=42)
         _assert_handle_called_once_with_client(mock_handle, bot, 1, "@0", 42)
@@ -2813,6 +2848,7 @@ class TestCheckInteractiveOnly:
             ) as mock_handle,
         ):
             mock_tm.find_window_by_id = AsyncMock(return_value=None)
+            mock_tm.window_exists = AsyncMock(return_value=False)
             await _check_interactive_only(bot, 1, "@0", 42)
         mock_handle.assert_not_called()
 
@@ -2904,3 +2940,78 @@ class TestCheckInteractiveOnly:
         _assert_handle_called_once_with_client(mock_handle, bot, 1, "@0", 42)
         if uses_pane_title:
             observe_tm.get_pane_title.assert_called_once_with("@0")
+
+
+class TestDeadBannerIndependentProbe:
+    async def _run(self, exists_result) -> AsyncMock:
+        bot = AsyncMock(spec=Bot)
+        with (
+            patch(
+                "ccgram.handlers.polling.window_tick.apply.tmux_manager"
+            ) as mock_tmux,
+            patch("ccgram.handlers.polling.window_tick.apply.thread_router") as mock_tr,
+            patch(
+                "ccgram.handlers.polling.window_tick.apply.clear_tool_msg_ids_for_topic"
+            ),
+            patch("ccgram.handlers.polling.window_tick.apply.window_query") as mock_wq,
+            patch(
+                "ccgram.handlers.polling.window_tick.apply.update_topic_emoji",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "ccgram.handlers.polling.window_tick.apply.render_banner"
+            ) as mock_banner,
+        ):
+            mock_tmux.window_exists = AsyncMock(return_value=exists_result)
+            mock_tr.resolve_chat_id.return_value = -100
+            mock_wq.view_window.return_value = MagicMock(cwd="/tmp")
+            mock_banner.return_value = ("text", None)
+            await _handle_dead_window_notification(bot, 1, 42, "@5")
+            return mock_banner
+
+    async def test_tmux_query_failure_does_not_declare_dead(self) -> None:
+        banner = await self._run(None)
+        banner.assert_not_called()
+
+    async def test_window_alive_does_not_declare_dead(self) -> None:
+        banner = await self._run(True)
+        banner.assert_not_called()
+
+    async def test_definitively_gone_declares_dead(self) -> None:
+        banner = await self._run(False)
+        banner.assert_called_once()
+
+
+class TestDeadAutocloseIndependentProbe:
+    async def _run(self, exists_result) -> AsyncMock:
+        bot = AsyncMock(spec=Bot)
+        _start_autoclose_timer(1, 100, "dead", time.monotonic() - 99999)
+        with (
+            patch("ccgram.handlers.topics.topic_lifecycle.config") as mock_config,
+            patch(
+                "ccgram.handlers.topics.topic_lifecycle.thread_router"
+            ) as mock_router,
+            patch("ccgram.handlers.topics.topic_lifecycle.tmux_manager") as mock_tm,
+            patch(
+                "ccgram.handlers.topics.topic_lifecycle.clear_topic_state",
+                new_callable=AsyncMock,
+            ),
+        ):
+            mock_config.autoclose_dead_minutes = 1
+            mock_router.resolve_chat_id.return_value = 42
+            mock_router.get_window_for_thread.return_value = "@5"
+            mock_tm.window_exists = AsyncMock(return_value=exists_result)
+            await check_autoclose_timers(bot)
+            return bot.delete_forum_topic
+
+    async def test_tmux_query_failure_never_deletes_topic(self) -> None:
+        delete = await self._run(None)
+        delete.assert_not_called()
+
+    async def test_alive_window_never_deletes_topic(self) -> None:
+        delete = await self._run(True)
+        delete.assert_not_called()
+
+    async def test_definitively_gone_deletes_topic(self) -> None:
+        delete = await self._run(False)
+        delete.assert_called_once()

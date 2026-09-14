@@ -207,6 +207,7 @@ class TestUpdateStatusInteractive:
             ),
         ):
             mock_tm.find_window_by_id = AsyncMock(return_value=w)
+            mock_tm.window_exists = AsyncMock(return_value=True)
             mock_tm.capture_pane = AsyncMock(return_value="pane text")
             await _update_status(bot, 1, "@0", thread_id=100, _window=w)
             mock_handle.assert_called_once()
@@ -249,6 +250,7 @@ class TestUpdateStatusActiveLine:
             patch("ccgram.handlers.polling.window_tick.apply.get_provider_for_window"),
         ):
             mock_tm.find_window_by_id = AsyncMock(return_value=w)
+            mock_tm.window_exists = AsyncMock(return_value=True)
             mock_tm.capture_pane = AsyncMock(return_value="pane text")
             mock_tr.resolve_chat_id.return_value = 42
             mock_tr.get_display_name.return_value = "test"
@@ -302,6 +304,7 @@ class TestUpdateStatusActiveLine:
             ),
         ):
             mock_tm.find_window_by_id = AsyncMock(return_value=w)
+            mock_tm.window_exists = AsyncMock(return_value=True)
             mock_tm.capture_pane = AsyncMock(return_value="pane text")
             mock_tr.resolve_chat_id.return_value = 42
             mock_tr.get_display_name.return_value = "test"
@@ -435,6 +438,7 @@ class TestCheckInteractiveOnly:
             ),
         ):
             mock_tm.find_window_by_id = AsyncMock(return_value=w)
+            mock_tm.window_exists = AsyncMock(return_value=True)
             mock_tm.capture_pane = AsyncMock()
             await _check_interactive_only(bot, 1, "@0", 100, _window=w)
             mock_tm.capture_pane.assert_not_called()
@@ -452,6 +456,11 @@ class TestDeadWindowNotification:
             ),
             patch(
                 "ccgram.handlers.polling.window_tick.apply.clear_tool_msg_ids_for_topic"
+            ),
+            patch(
+                "ccgram.handlers.polling.window_tick.apply.tmux_manager.window_exists",
+                new_callable=AsyncMock,
+                return_value=False,
             ),
             patch(
                 "ccgram.handlers.polling.window_tick.apply.rate_limit_send_message",
@@ -564,6 +573,11 @@ class TestDeadWindowTopicDeleted:
             ),
             patch(
                 "ccgram.handlers.polling.window_tick.apply.clear_tool_msg_ids_for_topic"
+            ),
+            patch(
+                "ccgram.handlers.polling.window_tick.apply.tmux_manager.window_exists",
+                new_callable=AsyncMock,
+                return_value=False,
             ),
             patch(
                 "ccgram.handlers.polling.window_tick.apply.rate_limit_send_message",
