@@ -86,3 +86,15 @@ def test_progress_system_prompt_is_mandatory() -> None:
     assert "must" in low
     assert "before each tool call" in low
     assert "never skip" in low
+
+
+def test_extract_artifact_links_dedups_and_keeps_order() -> None:
+    a = "https://claude.ai/code/artifact/053c35c3-7436-4f98-8571-b44dbe5b7139"
+    b = "https://claude.ai/artifact/abc123-DEF_456"
+    text = f"first {a}, again {a}, then {b}. Not this: https://claude.ai/code/other"
+    assert tldr.extract_artifact_links(text) == [a, b]
+
+
+def test_extract_artifact_links_none() -> None:
+    assert tldr.extract_artifact_links("no links here https://example.com/x") == []
+    assert tldr.extract_artifact_links("") == []

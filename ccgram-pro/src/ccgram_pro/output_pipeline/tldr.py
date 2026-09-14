@@ -117,3 +117,21 @@ def extract_tldr(text: str) -> str | None:
 def strip_tldr(text: str) -> str:
     """Remove every TL;DR block from *text* (for the web full-chat view)."""
     return _TLDR_RE.sub("", text).rstrip()
+
+
+# Published claude.ai artifact links (``/code/artifact/<id>`` today; the
+# ``/artifact/<id>`` form is accepted too). A scenario like manual testing
+# publishes its report as an artifact — the link is the deliverable, so the
+# summarizer guarantees it reaches Telegram even if the TL;DR omitted it.
+_ARTIFACT_URL_RE = re.compile(r"https://claude\.ai/(?:code/)?artifacts?/[A-Za-z0-9_-]+")
+
+
+def extract_artifact_links(text: str) -> list[str]:
+    """Return unique claude.ai artifact URLs found in *text*, in order."""
+    seen: set[str] = set()
+    links: list[str] = []
+    for url in _ARTIFACT_URL_RE.findall(text):
+        if url not in seen:
+            seen.add(url)
+            links.append(url)
+    return links

@@ -24,6 +24,11 @@ Scenarios shipping today:
   reply (mirrors the voice-edit flow: a high-priority ``MessageHandler`` in
   group −12 consumes the next message in that topic before ccgram's text
   handler can forward it).
+- **Manual testing** (humanprogram backend/app only): the pre-release manual
+  test run on the VPS — environment preflight (dev DB / servers / headless
+  Chrome), API-first cases with browser evidence, a Russian HTML report built
+  by the repo harness and published as a claude.ai artifact whose link is
+  guaranteed to reach Telegram (``tldr.extract_artifact_links``).
 - **All — branch → PR → auto-fix** (humanprogram backend/app only): the full
   pipeline — create a feature branch, commit, push, open a PR with ``gh``, then
   drive the PR auto-fixer on that new PR until green. No PR number to supply —
@@ -69,34 +74,39 @@ _REPO_BY_REMOTE: tuple[tuple[str, str], ...] = (
 # ── scenario prompts ──────────────────────────────────────────────────────────
 
 _SELF_REVIEW_PROMPT = """\
-Now you need to do careful and deep code review for your last implemented not pushed or just pushed changes.
-We need to make sure that the implementation has no issues and no gaps. Nothing is missing; code is professional, production-ready, follows best practices, and our current project rules.
-No need to run any workflows; however, just read again your changes and do a careful self-review.
-Check:
-- Does the solution fully satisfy the requirements?
-- Did it solve the root cause, not just a symptom?
-- Is the fix at the correct architectural layer?
-- Is it simple enough and not over-engineered?
-- Are edge cases handled?
-- Are errors handled correctly?
-- Are types/contracts/JSDocs or Typedocs updated?
-- Are all affected call sites updated?
-- Are tests meaningful (Backend only)?
-- Is it secure?
-- Is performance acceptable?
-- Is backward compatibility preserved where needed?
-- Are there no TODOs, debug logs, dead code, or temporary artifacts?
-- Are we sure we have no regressions?
+Нужно провести тщательное и глубокое code review последних реализованных тобой изменений, которые еще не были запушены или были запушены только что.
 
-If you find issues, fix them before finalizing."""
+Необходимо убедиться, что в реализации нет проблем или пробелов и что она полностью соответствует требованиям. Ничего не должно быть упущено. Код должен быть профессиональным, готовым к production, соответствовать best practices и текущим правилам проекта.
+
+Запускать workflows не нужно. Просто еще раз внимательно прочитай свои изменения и проведи тщательное селф-ревью.
+
+Проверь:
+
+- Главный вопрос: вообще все ли правильно реализовано с высоты взгляда - правильно согласно рекварементам и правильно в архитектуре? Иначе мы просто будем фиксить микро-изьяны изначально неверной реализации. Если есть какие-то глобальные проблемы, то на этом этапе лучше остановиться и обсудить с мной.
+- Полностью ли решение соответствует требованиям?
+- Устраняет ли оно корневую причину проблемы, а не только ее симптом?
+- Реализовано ли исправление на правильном архитектурном уровне?
+- Достаточно ли решение простое и не переусложнено ли оно?
+- Обработаны ли edge cases?
+- Корректно ли обрабатываются ошибки?
+- Обновлены ли types, contracts, JSDocs или Typedocs?
+- Обновлены ли все затронутые call sites?
+- Являются ли тесты содержательными и действительно полезными? Только для Backend.
+- Безопасна ли реализация?
+- Приемлема ли производительность?
+- Сохранена ли backward compatibility там, где это необходимо?
+- Не осталось ли TODOs, debug logs, dead code или временных артефактов?
+- Уверены ли мы, что изменения не привели к regressions?
+
+Если ты обнаружишь какие-либо проблемы, исправь их перед завершением работы."""
 
 # ``__PR__`` / ``__REPO__`` are substituted via str.replace (no brace escaping,
 # the body contains literal JSON braces).
 _PR_FIXER_TEMPLATE = """\
-We are entering mode to address code review feedback and make PR #__PR__ fully ready for merge. You need to use the following script:
+Мы переходим в режим обработки code review feedback и подготовки PR #__PR__ к merge: нужно довести все проверки до зеленого состояния. Для этого необходимо использовать следующий скрипт:
 
 Script: /root/projects/humanprogram/backend/var/pr-check.sh
-Env:    REPO=__REPO__   (required — use this value)
+Env:    REPO=__REPO__   (required — используй именно это значение)
         OWNER=humanprogram   (default)
         POLL_SECS=30   (default)
 
@@ -122,19 +132,35 @@ Commands:
 
 Status JSON goes to stdout; progress messages go to stderr.
 
-No need to limit script output length or execution time. This script can run for some time (Cursor Bot review can take 5-20 minutes) until we have PR status ready for your review. If everything is ready or something is wrong and needs my attention, you just play notification sound so I can check the result or answer your questions - afplay /System/Library/Sounds/Glass.aiff.
-However, if you see that something has failed or if we have comments from Cursor bot, you should automatically do analysis and fix the issues:
-- If Typecheck is failing, run `pnpm typecheck` locally and fix the issues.
-- If Unit tests are failing, run `pnpm test` locally and fix the issues.
-- If Cursor bot comments are present, analyze the comments deeply to understand if they are real issues or false positives. Don't make immediate assumptions. Spend time for analysis.
-  - If they are real issues, fix them carefully and professionally to make sure nothing breaks and issue is resolved. We need production ready code. (We should be careful with marking issues as real issues, just to make sure that we do not go too far from our initial requirements. If something is critical, requires any discussions and re-work, better to stop the loop and ask me. I just don't want, after all the loops, to check the result and find that some functionality was cut or significantly reworked without my approval.) After that, run `reply-resolve` command to resolve the issue and leave your comment that issue was addressed. Next commit and push changes (with professional commit message, avoid noting Claude as collaborator in the commit message), and run `pr-check.sh` again to wait and check the PR status after your changes. Script has short 5sec delay in the beginning to let Github process your commit and run pipelines.
-  - If they are false positives, run `reply-resolve` command to resolve the issue and leave your comment that this issue is false positive. Nothing to commit if no any real issue that requires addressing.
-Continue this process until all issues are resolved, all checks are green and PR is ready for merge. After each iteration, provide some short but prominent header with a short summary of the progress - what was done.
-Remember to be careful to not break anything. We need a professional and production-ready implementation that will follow best practices and our current project rules. No quick changes or hacks. We should have proper implementation.
+Не нужно ограничивать длину вывода скрипта или время его выполнения. Скрипт может работать некоторое время — review от Cursor Bot может занимать от 5 до 20 минут — пока статус PR не будет готов к проверке. Так же, если есть мерж конфликты, то они не будут видны в output скрипта, проверяй это отдельно.
 
-One more rule is to avoid an infinite loop. Please execute no more than 20 iterations. Generally Cursor bot leave 1-5 comments after each run, it is not leaving all comments at once, so it is fine to have some amount of iterations. However, after the 20th iteration, please break to avoid an infinite loop.
+Если все готово или возникла проблема, требующая моего внимания, просто заверши ход итоговым сообщением (или вопросом ко мне) — на сервере нет звука, я увижу его в Telegram и отвечу.
 
-Don't merge PRs by yourself. Your only goal is to bring it to the state where all checks are green."""
+Однако, если какая-либо проверка завершилась с ошибкой или появились комментарии от Cursor Bot, ты должен автоматически проанализировать проблему и исправить ее:
+
+- Если падает Typecheck, запусти локально `pnpm typecheck` и исправь ошибки.
+- Если падают Unit tests, запусти локально `pnpm test` и исправь ошибки.
+- Если появились комментарии от Cursor Bot, тщательно проанализируй их, чтобы определить, являются ли они реальными проблемами или false positives. Не делай поспешных выводов — удели достаточно времени анализу.
+
+  - Если это реальные проблемы, исправь их тщательно и профессионально. Убедись, что ничего не сломано и каждая проблема действительно устранена. Нам нужен production-ready код.
+
+    Нужно осторожно определять, является ли комментарий реальной проблемой, чтобы случайно не отклониться слишком далеко от первоначальных требований. Если проблема критическая, требует обсуждения или существенной переработки, лучше остановить цикл и спросить меня. Я не хочу после завершения всех итераций обнаружить, что какая-либо функциональность была удалена или значительно переработана без моего согласования.
+
+    После исправления выполни команду `reply-resolve`, чтобы оставить комментарий о том, что проблема устранена, и закрыть соответствующий thread. Затем сделай commit и push изменений. Используй профессиональный commit message и не указывай Claude в качестве collaborator в commit message.
+
+    После этого снова запусти `pr-check.sh`, дождись завершения проверок и проверь статус PR после внесенных изменений. В начале работы скрипт делает короткую задержку в 5 секунд, чтобы GitHub успел обработать commit и запустить pipelines.
+
+  - Если комментарий является false positive, выполни команду `reply-resolve`, оставь объяснение, почему это false positive, и закрой соответствующий thread. Если реальных проблем, требующих исправления, нет, создавать commit не нужно.
+
+Продолжай этот процесс, пока все проблемы не будут устранены, все checks не станут зелеными и PR не будет полностью готов к merge.
+
+После каждой итерации выводи короткий, но заметный заголовок с кратким описанием прогресса и выполненных действий.
+
+Действуй осторожно, чтобы ничего не сломать. Нам нужна профессиональная и production-ready реализация, которая соответствует best practices и текущим правилам проекта. Не используй быстрые исправления или хаки — реализация должна быть качественной и корректной.
+
+Еще одно правило — не допускать бесконечного цикла. Выполни не более 20 итераций. Обычно Cursor Bot оставляет от 1 до 5 комментариев после каждого запуска и не публикует все комментарии сразу, поэтому несколько итераций — это нормально. Однако после 20-й итерации остановись, чтобы избежать бесконечного цикла.
+
+Не выполняй merge PR самостоятельно. Твоя единственная цель — довести PR до состояния, в котором все checks зеленые и он готов к merge."""
 
 
 def _pr_fixer_prompt(pr: str, repo: str) -> str:
@@ -178,22 +204,105 @@ Please create a new feature branch for the current changes, then commit and push
 When done, report the branch name, the exact commit message you used, and the push result (branch + remote)."""
 
 
+# Manual testing on the VPS (humanprogram backend/app only). The report is
+# published as a claude.ai artifact; the summarizer guarantees the link lands
+# in Telegram even if the TL;DR omitted it (see tldr.extract_artifact_links).
+_MANUAL_TESTING_PROMPT = """\
+# Ручное тестирование
+
+Мы переходим к ручному тестированию на локальной среде этого сервера перед выкаткой на прод. Задача: убедиться, что проверены все основные кейсы и edge-cases, и оставить отчёт, после которого не остаётся сомнений, что можно катить.
+
+Фича может быть только бэкендная, только фронтовая или сквозная. Разберись по диффу, какие слои затронуты, и тестируй те, что затронуты.
+
+## Прежде всего
+
+**Ничего не начинай, пока пул реквесты не зелёные.** Бот на PR может выдать замечания, мы будем фиксить, всё поменяется, и тестирование придётся повторять. Проверь статусы всех связанных PR и только потом начинай.
+
+**Прочитай доки по ручному тестированию в репозиториях, они уже написаны:**
+
+- `/root/projects/humanprogram/backend/docs/manual-testing.md` - метод, факты про API и аутентификацию, снимок/восстановление состояния, что нельзя проверить локально
+- `/root/projects/humanprogram/app/docs/manual-testing-ui.md` - браузер, хранилище, оверлеи, селекторы, контролы, которые скрыты по правилу, а не сломаны
+
+**Используй готовый харнесс, не пиши его заново:**
+
+- `backend/test/manual/lib/` - `record()` и фильтр `ONLY=`, снимок базы с проверкой восстановления, HTTP и авторизация, выпуск magic-ссылок
+- `backend/test/manual/report/build.js` - сборка самодостаточного HTML-отчёта
+- `app/test/manual/lib/` - запуск Chrome, ожидание по маркеру, клики, гашение оверлеев, чтение сессии из localStorage, проверка композера
+- шаблоны прогона: `test/manual/runs/template.run.js` в обоих репозиториях
+
+Скопируй шаблон **рядом с ним же**, в `test/manual/runs/`, и правь копию. Там `.gitignore` пропускает только сам шаблон, поэтому скрипт прогона не попадёт в коммит, но относительные пути до библиотек резолвятся. Копировать в `/tmp` не надо - оттуда `require('../lib/...')` не найдётся.
+
+## Среда на этом сервере (VPS)
+
+- Репозитории: бэкенд `/root/projects/humanprogram/backend` (`primer_server`), фронт `/root/projects/humanprogram/app` (это `hyper_school_dashboard` - в доках и харнессе он называется `dashboard`). Из-за этого дефолт `MT_DASHBOARD_ENV=../dashboard/.env` здесь не резолвится - передавай явно `MT_DASHBOARD_ENV=/root/projects/humanprogram/app/.env`
+- Бэкенд `localhost:3000` (он же админка; `MT_API_BASE=http://localhost:3000/v1`), фронт `localhost:5173` (`MT_APP_BASE=http://localhost:5173`). Ничего из этого не запущено постоянно - поднимаешь сам: бэкенд `npm run start:dev` из корня backend, фронт `pnpm dev` из корня app. Если что-то уже висит на этих портах - убей и подними заново со свежим кодом. После правок бэкенда перезапускай его. Логи серверов сохраняй в папку evidence
+- База: Docker MySQL 8.4 на `127.0.0.1:3306`, пользователь `root` без пароля, схема `primer_development` (бэкенд берёт её по умолчанию, если в `.env` не задано иное). Redis на `127.0.0.1:6379` уже запущен
+- Перед стартом проверь, что миграции накачены (`npm run db:migrate`): сервер поднимется и с непринятой миграцией, но будет валиться на запросах
+- **Прод-реплика (`hp-db`) - только для чтения и НЕ для тестирования.** Никаких мутаций через неё, никакой подмены dev-базы прод-данными. Тестируем только в `primer_development`
+- База и данные dev-среды в твоём распоряжении, готовь любые фикстуры
+
+**Префлайт - обязателен, до любых действий.** Проверь и запиши в отчёт: контейнер MySQL запущен, схема `primer_development` существует и в ней есть данные (`SHOW DATABASES LIKE 'primer_development'`, `SELECT COUNT(*) FROM users`), миграции накачены, у бэкенда есть `.env` (или он стартует на дефолтах), у фронта в `.env` `VITE_API_BASE_URL=http://localhost:3000/v1` и basic-auth совпадает с `api_users` в dev-базе, оба сервера отвечают. **Если dev-базы, данных или тестовых аккаунтов нет - остановись и доложи, что именно отсутствует и что нужно для подготовки (дамп локальной базы, `.env`), ничего не выдумывай и не подменяй.**
+
+**Аккаунты** (dev-база - копия моей локальной; проверь их наличие запросом перед прогоном). На почте `eugene@humanprogram.com` висят ДВА аккаунта - `4` и `41`. Логин отдаёт список и штампует введённый адрес на обе записи, так что по email их не различить; `signIn` это знает и требует явный выбор: `signIn(email, code, { userId: 4 })`. Без `userId` он бросит исключение со списком - это не поломка, а защита от молчаливого входа не в тот аккаунт.
+
+- `4` - мой основной аккаунт (роль `admin`, но это студент с админ-правами: есть сквады, история чата, объявления, родители). Годится почти для всего
+- `72` - его родитель (Valentina Dolgova)
+- `1196722` → `1196723` (Test Parent23 → Test Student23) - пара для перехода «родитель → ребёнок». У аккаунта 4 эта кнопка НЕ показывается, потому что у него своя почта, и это правильное поведение продукта. У этой пары не пройден онбординг: проставь `onboardingCompletedAt` перед прогоном и сними после
+- Создаёшь новых пользователей - обязательно проставь им онбординг в базе, иначе после входа откроется онбординг, а не дашборд
+
+**Comet Chat.** Дев-аккаунт превысил лимит в 100 юзеров, поэтому ошибки и тост с 402 ожидаемы, особенно для новых пользователей. Игнорируй их, но следи, чтобы тост не попадал в скриншоты отчёта (`dismissToasts()` в харнессе).
+
+**Пароль ко всем локальным аккаунтам, если где-то спросят: `1234`.** Еще один тестовый код входа `3791`, работает только для аккаунтов с `isTester = 1` или `isDemoNpc = 1`.
+
+**Браузер.** На сервере нет дисплея, поэтому запускай Chrome только headless: `MT_HEADLESS=1` и `MT_CHROME=/root/.cache/puppeteer/chrome/linux-150.0.7871.115/chrome-linux64/chrome` (если версия сменилась - посмотри `ls /root/.cache/puppeteer/chrome/`). Скриншоты в headless снимаются нормально; в доке есть оговорка, что headless рендерит чуть иначе - если это влияет на вывод, отметь в отчёте.
+
+## Как проводить прогон
+
+Метод подробно описан в `backend/docs/manual-testing.md`. Главное:
+
+- **Доказывай изменение состояния, а не внешний вид.** Прочитал состояние, подействовал, прочитал снова, сравнил. Скриншот подтверждает историю, но редко является доказательством сам по себе
+- **Сначала API-слой, браузер только там, где нужен человеческий взгляд** или где поведение вообще не доходит до нашего сервера. API-кейс отрабатывает за секунду, браузерный за минуты
+- **У каждого основного кейса должна быть контрольная группа.** «Подавляется для админа» ничего не значит, пока та же фикстура и те же клики в обычной сессии не дают противоположный результат
+- **Упавший кейс - это твоя фикстура, пока не доказано обратное.** Если основной кейс и его контрольная группа падают ОДИНАКОВО, дело почти наверняка в фикстуре, а не в продукте
+- **Оформи прогон блоками с фильтром `ONLY=`**, чтобы перезапускать упавший кейс, не гоняя те, что двигают деньги или создают счета у провайдера
+- **Сними снимок всего, что трогаешь, восстанови и ПРОВЕРЬ запросом.** Восстанавливай все поля, которые менял, а не только то, о чём думал
+
+## Хранение артефактов
+
+- Всё - скриншоты, сырые JSON, скрипты, логи - в папку `/root/projects/humanprogram/.mt-evidence/<дата>-<тема>/`, вне `/tmp` и вне сессионного scratchpad. Передай её обоим харнессам через `MT_EVIDENCE`, тогда бэкендная и фронтовая половины соберутся в один отчёт
+- Результат каждого кейса пиши в файл сразу после прогона, а не в конце. Харнесс уже так делает
+- Перед новым прогоном удали отчёты старше недели, если такие лежат рядом
+- После сдачи отчёта удали рабочую папку целиком. Долговременная копия - это опубликованный артефакт
+
+## Отчёт
+
+- **На русском языке**, самодостаточный (скриншоты внутри файла)
+- Собери его из файлов кейсов через `backend/test/manual/report/build.js`, чтобы его можно было пересобрать, ничего не перепроверяя
+- Русский язык задаётся в конфиге прогона, а не в репозитории: в репозиториях всё по-английски, потому что команда интернациональная. Передай в meta-конфиг блок `labels` с русскими подписями (пример есть в `backend/docs/manual-testing.md`), а тексты самих кейсов пиши по-русски прямо в конфиге. Ничего переводить в коде не надо
+- Сначала summary: сколько основных кейсов, сколько регрессий, сколько edge-cases, сколько упало
+- Дальше по каждому кейсу: что проверяли, что получили с конкретными числами (строки в базе до и после, HTTP-статус, разобранный клейм), и там, где это видно в UI - скриншот с коротким объяснением, что на нём и почему это доказывает, что кейс пройден
+- **Отдельным блоком: что осталось непроверенным и почему.** Что подменялось в базе вместо ожидания по времени, что проверено только чтением кода, какие внешние настройки надо подтвердить на проде перед выкаткой
+- **Опубликуй отчёт артефактом (инструмент Artifact) сразу, как он готов, и ОБЯЗАТЕЛЬНО вставь ссылку на артефакт в TL;DR-блок финального сообщения** - в Telegram приходит только короткая версия, и ссылка должна быть в ней. Если артефакт опубликовать не удалось - скажи об этом прямо и приложи путь к HTML-отчёту
+
+Если по ходу выяснится, что какой-то устойчивый факт про среду или про приложение не описан в доках репозитория, а ты потратил на него цикл отладки - скажи мне об этом в конце. Такие вещи надо дописывать в доки, чтобы следующий прогон был быстрее."""
+
+
 # Prepended to the PR-fixer body to make the all-in-one flow. ``<PR>`` in the
 # fixer body is the number ``gh pr create`` returns in STEP 2.
 _FULL_FLOW_PREAMBLE = """\
-Please take the current changes all the way to a green, merge-ready pull request. Do every step below in order; only stop if something is genuinely ambiguous or risky (and then ask me).
+Нужно довести текущие изменения до зеленого, готового к merge pull request. Выполни все шаги ниже по порядку; останавливайся только если что-то действительно неоднозначно или рискованно (и тогда спроси меня).
 
-STEP 1 — Feature branch, commit & push:
-- Review what actually changed (git status + git diff). Create a NEW branch off the current branch with a clear, conventional name matching this repo's style (e.g. `feature/<short-kebab-summary>`).
-- Stage only the files that belong in this change — do NOT blindly `git add -A`; leave out anything unintended or unrelated and tell me if you see such a file.
-- Commit with a clear, meaningful message describing the INTENT, following this project's commit conventions. Do NOT add a `Co-Authored-By` trailer and do NOT mention Claude, AI, or this assistant anywhere.
-- Push the branch and set its upstream (`git push -u origin <branch>`).
+STEP 1 — Feature-ветка, commit и push:
+- Посмотри, что реально изменилось (git status + git diff). Создай НОВУЮ ветку от текущей с понятным именем в стиле этого репозитория (например `feature/<короткое-описание-через-дефис>`).
+- Добавляй в staging только файлы, относящиеся к этому изменению — НЕ делай слепой `git add -A`; всё постороннее (артефакты сборки, локальные конфиги, файлы редактора) оставь незастейдженным и скажи мне о таких файлах.
+- Сделай commit с понятным сообщением, описывающим СУТЬ изменения, по конвенциям этого проекта. НЕ добавляй трейлер `Co-Authored-By` и НЕ упоминай Claude, AI или этого ассистента нигде.
+- Запушь ветку и установи upstream (`git push -u origin <branch>`).
 
-STEP 2 — Open the pull request:
-- Create the PR with `gh pr create` against the repository's DEFAULT branch (for the humanprogram backend the default is `develop`; confirm via `git remote show origin`). Write a clear title (the change intent) and a concise body (what changed, why, and how to test). Do NOT mention Claude or AI in the PR.
-- Note the PR NUMBER that `gh pr create` returns — in every command below, `<PR>` is that number.
+STEP 2 — Открой pull request:
+- Создай PR через `gh pr create` против ветки по умолчанию репозитория (для humanprogram backend это `develop`; проверь через `git remote show origin`). Понятный заголовок (суть изменения) и краткое описание (что изменилось, зачем и как проверить). НЕ упоминай Claude или AI в PR.
+- Запомни НОМЕР PR, который вернёт `gh pr create` — во всех командах ниже `<PR>` — это он.
 
-STEP 3 — Drive the PR auto-fixer on the PR you just opened until all checks are green and it is merge-ready:
+STEP 3 — Прогоняй PR auto-fixer по только что открытому PR, пока все проверки не станут зелёными и PR не будет готов к merge:
 
 """
 
@@ -216,7 +325,10 @@ def _decode(data: str) -> tuple[str, str] | None:
     if not data.startswith(_CB_PREFIX):
         return None
     action, _, window_id = data[len(_CB_PREFIX) :].partition(":")
-    if action not in ("menu", "sr", "cp", "sm", "fb", "fa", "pr", "x") or not window_id:
+    if (
+        action not in ("menu", "sr", "cp", "sm", "fb", "fa", "pr", "mt", "x")
+        or not window_id
+    ):
         return None
     return action, window_id
 
@@ -424,6 +536,8 @@ async def _route_topic_action(
         await _run_full_flow(query, window_id, user_id, thread_id, context)
     elif action == "pr":
         await _ask_pr_number(query, window_id, user_id, thread_id, context)
+    elif action == "mt":
+        await _run_manual_testing(query, window_id, user_id, thread_id, context)
 
 
 async def _open_menu(query: Any, window_id: str) -> None:
@@ -475,6 +589,13 @@ async def _open_menu(query: Any, window_id: str) -> None:
                 InlineKeyboardButton(
                     "🚀 Branch → PR → auto-fix",
                     callback_data=_encode("fa", window_id),
+                )
+            ]
+        )
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    "🧪 Manual testing", callback_data=_encode("mt", window_id)
                 )
             ]
         )
@@ -593,6 +714,30 @@ async def _run_full_flow(
         bot=context.bot,
     )
     await query.answer("Full flow started")
+
+
+async def _run_manual_testing(
+    query: Any, window_id: str, user_id: int, thread_id: int, context: Any
+) -> None:
+    repo = await _detect_pr_repo(window_id)
+    if repo is None:
+        await query.answer("Not a humanprogram backend/app repo", show_alert=True)
+        return
+    note = (
+        "🧪 Scenario triggered: Manual testing\n"
+        "Preflight of the local VPS environment, API + headless-browser run "
+        "with evidence, then a Russian HTML report published as an artifact."
+    )
+    await _edit_to_note(query.message, note)
+    await _forward_scenario(
+        window_id=window_id,
+        user_id=user_id,
+        thread_id=thread_id,
+        prompt=_MANUAL_TESTING_PROMPT,
+        anchor=query.message,
+        bot=context.bot,
+    )
+    await query.answer("Manual testing started")
 
 
 async def _ask_pr_number(
@@ -774,7 +919,7 @@ def install_scenarios(application: Any) -> None:
     _installed = True
     logger.info(
         "ccgram-pro scenarios installed — self-review + commit/push + sync-main "
-        "+ PR auto-fixer"
+        "+ PR auto-fixer + manual testing"
     )
 
 

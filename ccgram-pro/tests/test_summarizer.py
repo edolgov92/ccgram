@@ -260,3 +260,36 @@ async def test_maybe_save_returns_none_for_non_git(tmp_path: Path) -> None:
     )
     assert result is None
     assert load_index("@nogit") is None
+
+
+def test_build_summary_appends_artifact_link_missing_from_tldr(tmp_path: Path) -> None:
+    t = tmp_path / "t.jsonl"
+    url = "https://claude.ai/code/artifact/053c35c3-7436-4f98-8571-b44dbe5b7139"
+    _write_turn(
+        t, tldr="Отчёт готов, всё зелёное.", body=f"Published the report: {url}"
+    )
+    summary_text, _share = summarizer._build_summary_and_share(
+        transcript_path=str(t), window_id="@1", num_turns=1
+    )
+    assert summary_text.startswith("Отчёт готов, всё зелёное.")
+    assert f"📎 {url}" in summary_text
+
+
+def test_build_summary_does_not_duplicate_artifact_link_in_tldr(tmp_path: Path) -> None:
+    t = tmp_path / "t.jsonl"
+    url = "https://claude.ai/code/artifact/1a0edaf9-a11c-4ac3-b7ca-5b6171a15c31"
+    _write_turn(t, tldr=f"Отчёт: {url}", body=f"Published {url} and done")
+    summary_text, _share = summarizer._build_summary_and_share(
+        transcript_path=str(t), window_id="@1", num_turns=1
+    )
+    assert summary_text.count(url) == 1
+    assert "📎" not in summary_text
+
+
+def test_build_summary_unchanged_without_artifact_links(tmp_path: Path) -> None:
+    t = tmp_path / "t.jsonl"
+    _write_turn(t, tldr="Just a summary.", body="see https://example.com/report")
+    summary_text, _share = summarizer._build_summary_and_share(
+        transcript_path=str(t), window_id="@1", num_turns=1
+    )
+    assert summary_text == "Just a summary."

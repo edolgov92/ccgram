@@ -134,9 +134,12 @@ def test_button_icon_and_callback() -> None:
 
 def test_self_review_prompt_content() -> None:
     p = scn._SELF_REVIEW_PROMPT
-    assert "deep code review" in p.lower()
-    assert "root cause" in p.lower()
-    assert p.rstrip().endswith("If you find issues, fix them before finalizing.")
+    assert "code review" in p.lower()
+    assert "корневую причину" in p
+    assert "архитектур" in p.lower()
+    assert p.rstrip().endswith(
+        "Если ты обнаружишь какие-либо проблемы, исправь их перед завершением работы."
+    )
 
 
 def test_pr_fixer_prompt_substitution() -> None:
@@ -145,9 +148,12 @@ def test_pr_fixer_prompt_substitution() -> None:
     assert "PR #4567" in p
     assert "REPO=frontend" in p
     assert "/root/projects/humanprogram/backend/var/pr-check.sh" in p
-    assert "no more than 20 iterations" in p
+    assert "/Users/" not in p
+    assert "не более 20 итераций" in p
     assert "pnpm typecheck" in p
-    assert "Glass.aiff" in p
+    assert "afplay" not in p
+    assert "Telegram" in p
+    assert "reply-resolve" in p
     assert "status 4567" in p
 
 
@@ -689,5 +695,82 @@ def test_full_flow_prompt_content() -> None:
     assert "gh pr create" in p
     assert "REPO=backend" in p
     assert "<PR>" in p
-    assert "no more than 20 iterations" in p
+    assert "не более 20 итераций" in p
     assert "claude" in p.lower()
+    assert "develop" in p
+
+
+# ── manual testing ───────────────────────────────────────────────────────────
+
+
+def test_decode_manual_testing() -> None:
+    assert scn._decode(scn._encode("mt", "@5")) == ("mt", "@5")
+
+
+def _menu_callbacks(msg: _Msg) -> list[str]:
+    kb = msg.replies[0]["reply_markup"]
+    return [b.callback_data for row in kb.inline_keyboard for b in row]
+
+
+async def test_menu_shows_manual_testing_when_pr_eligible(monkeypatch) -> None:
+    _own(monkeypatch)
+    _git_repo(monkeypatch, True)
+    _detect(monkeypatch, "backend")
+    msg = _Msg()
+    update = _callback_update("ccgrampro:scn:menu:@5", msg)
+    with pytest.raises(ApplicationHandlerStop):
+        await scn.handle_scenarios_callback(update, SimpleNamespace(bot=_Bot()))
+    assert "ccgrampro:scn:mt:@5" in _menu_callbacks(msg)
+
+
+async def test_menu_hides_manual_testing_when_ineligible(monkeypatch) -> None:
+    _own(monkeypatch)
+    _git_repo(monkeypatch, True)
+    _detect(monkeypatch, None)
+    msg = _Msg()
+    update = _callback_update("ccgrampro:scn:menu:@5", msg)
+    with pytest.raises(ApplicationHandlerStop):
+        await scn.handle_scenarios_callback(update, SimpleNamespace(bot=_Bot()))
+    assert "ccgrampro:scn:mt:@5" not in _menu_callbacks(msg)
+
+
+async def test_manual_testing_forwards_prompt(monkeypatch) -> None:
+    _own(monkeypatch)
+    _detect(monkeypatch, "frontend")
+    forwarded = _stub_forward(monkeypatch)
+    _stub_bubble(monkeypatch)
+    msg = _Msg()
+    update = _callback_update("ccgrampro:scn:mt:@5", msg)
+    with pytest.raises(ApplicationHandlerStop):
+        await scn.handle_scenarios_callback(update, SimpleNamespace(bot=_Bot()))
+    assert msg.edits and "Manual testing" in msg.edits[0]["text"]
+    assert forwarded == [("@5", 7, 2, scn._MANUAL_TESTING_PROMPT)]
+
+
+async def test_manual_testing_ineligible_does_not_forward(monkeypatch) -> None:
+    _own(monkeypatch)
+    _detect(monkeypatch, None)
+    forwarded = _stub_forward(monkeypatch)
+    msg = _Msg()
+    update = _callback_update("ccgrampro:scn:mt:@5", msg)
+    with pytest.raises(ApplicationHandlerStop):
+        await scn.handle_scenarios_callback(update, SimpleNamespace(bot=_Bot()))
+    assert forwarded == []
+
+
+def test_manual_testing_prompt_content() -> None:
+    p = scn._MANUAL_TESTING_PROMPT
+    # VPS paths, never the author's laptop paths.
+    assert "/root/projects/humanprogram/backend" in p
+    assert "/root/projects/humanprogram/app" in p
+    assert "/Users/" not in p and "~/Documents" not in p
+    # Server adaptations: headless Chrome, explicit dashboard .env, evidence dir.
+    assert "MT_HEADLESS=1" in p
+    assert "MT_CHROME=" in p
+    assert "MT_DASHBOARD_ENV=/root/projects/humanprogram/app/.env" in p
+    assert "/root/projects/humanprogram/.mt-evidence/" in p
+    # Preflight + prod-replica guard + artifact link contract.
+    assert "primer_development" in p
+    assert "hp-db" in p and "только для чтения" in p
+    assert "Artifact" in p and "TL;DR" in p
+    assert "labels" in p

@@ -262,12 +262,16 @@ def _build_summary_and_share(
     the web "View full turn" page. If Claude omitted the TL;DR (trivial turn),
     fall back to the full last-assistant text with the Telegram-only markers
     (TL;DR + progress notes) stripped.
+
+    Published claude.ai artifact links found anywhere in the turn's final text
+    (a manual-testing report, say) are appended to the summary when the TL;DR
+    itself left them out — the link is the deliverable and must reach Telegram.
     """
     # Lazy: transcript_events pulls only stdlib + dataclasses.
     from .transcript_events import events_to_dicts, extract_events
 
     # Lazy: tldr is a pure-stdlib layer module.
-    from .tldr import extract_tldr, strip_progress, strip_tldr
+    from .tldr import extract_artifact_links, extract_tldr, strip_progress, strip_tldr
 
     last_text, _tool_count = _extract_last_assistant_text_and_tool_count(
         transcript_path
@@ -291,7 +295,14 @@ def _build_summary_and_share(
         summary_text = strip_progress(strip_tldr(last_text)).strip()
     else:
         summary_text = "✅ Done."
-    return (summary_text or "✅ Done."), share_id
+    summary_text = summary_text or "✅ Done."
+
+    missing_links = [
+        url for url in extract_artifact_links(last_text) if url not in summary_text
+    ]
+    if missing_links:
+        summary_text += "\n\n" + "\n".join(f"📎 {url}" for url in missing_links)
+    return summary_text, share_id
 
 
 async def _post_summaries_to_bindings(
