@@ -82,6 +82,22 @@ async def drive_multi_select(window_id: str, indices: list[int]) -> bool:
     return await _press(target, "Enter")
 
 
+async def press_keys(window_id: str, keys: list[str]) -> bool:
+    """Send literal tmux keys to *window_id* in order (no Enter appended).
+
+    Used to answer Claude Code's own modals, whose options are single
+    keypresses ("0" to dismiss, ``Escape`` to keep) rather than a selector.
+    """
+    target = await _resolve_target(window_id)
+    if target is None:
+        logger.debug("press_keys: window %s gone", window_id)
+        return False
+    for key in keys:
+        if not await _press(target, key):
+            return False
+    return True
+
+
 async def drive_cancel(window_id: str) -> bool:
     """Dismiss the prompt with Escape."""
     target = await _resolve_target(window_id)

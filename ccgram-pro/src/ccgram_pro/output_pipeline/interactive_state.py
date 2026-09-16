@@ -56,16 +56,18 @@ def _wrap_handle_interactive_ui(original: Any) -> Any:
                 # The clean keyboard owns this prompt — report "handled" so
                 # callers don't post the scraped UI or clear interactive mode.
                 return True
-            # Claude Code's "resume from summary?" dialog: answered for the
-            # user (always the full session) instead of surfacing arrow keys.
+            # Claude Code's own modals (resume-from-summary, drafted bug
+            # report, feedback opt-out) are answered for the user instead of
+            # surfacing arrow keys — and, crucially, instead of letting the
+            # next forwarded message be typed into a modal and swallowed.
             try:
                 # Lazy: sibling module; deferred to keep import edges minimal.
-                from . import resume_dialog
+                from . import tui_dialogs
 
-                if await resume_dialog.auto_answer(window_id):
+                if await tui_dialogs.auto_answer(window_id):
                     return True
             except Exception:  # noqa: BLE001 -- never lose the prompt
-                logger.warning("resume-dialog auto-answer failed", exc_info=True)
+                logger.warning("tui-dialog auto-answer failed", exc_info=True)
             # Not owned yet: try the clean UI FIRST so whichever path detects
             # the prompt first (the 1s poll tick or the slower Notification
             # hook) posts it — the scraped UI no longer wins the race. Falls
